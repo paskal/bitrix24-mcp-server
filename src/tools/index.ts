@@ -9,6 +9,7 @@ import { registerCrmContactTools } from "./crm-contacts.js";
 import { registerCrmLeadTools } from "./crm-leads.js";
 import { registerUserTools } from "./users.js";
 import { registerWorkgroupTools } from "./workgroups.js";
+import { registerImChatTools } from "./im-chat.js";
 
 export function registerAllTools(server: McpServer, client: BitrixClient): void {
   registerTaskTools(server, client);
@@ -20,4 +21,5 @@ export function registerAllTools(server: McpServer, client: BitrixClient): void 
   registerCrmLeadTools(server, client);
   registerUserTools(server, client);
   registerWorkgroupTools(server, client);
+  registerImChatTools(server, client);
 }
