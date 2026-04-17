@@ -1,6 +1,6 @@
 # Bitrix24 MCP Server
 
-An MCP (Model Context Protocol) server that exposes Bitrix24 REST API to AI assistants. Provides 23 tools for managing tasks, CRM entities, users, and workgroups via Bitrix24's inbound webhook API.
+An MCP (Model Context Protocol) server that exposes Bitrix24 REST API to AI assistants. Provides 27 tools for managing tasks, CRM entities, users, workgroups, and Knowledge Base articles via Bitrix24's inbound webhook API.
 
 ## Tools
 
@@ -36,6 +36,16 @@ An MCP (Model Context Protocol) server that exposes Bitrix24 REST API to AI assi
 - `bitrix24_user_search` — search users by name
 - `bitrix24_workgroup_list` — list workgroups and projects
 
+### Knowledge Base (4, optional)
+Requires the third-party marketplace app [«База знаний и тестирование» by IT-Solution](https://it-solution.ru/b24apps/prilozhenie_bitrix24_baza_znanii/) installed on your portal. Bitrix24's native REST API does not expose knowledge base content — this app fills the gap with its own REST API.
+
+- `kb_article_get` — fetch a KB article by ID (rendered HTML body, title, access lists, metadata)
+- `kb_directory_structure` — list a directory's nested sub-directories and articles (IDs and titles, no bodies)
+- `kb_article_save` — create or update an article (HTML body)
+- `kb_gpt_ask` — query the KB's built-in GPT assistant
+
+KB tools are registered only when `KB_API_TOKEN` (or `KB_API_TOKEN_OP_REF`) is set; otherwise they're silently skipped.
+
 ## Prerequisites
 
 - Node.js 20+
@@ -70,6 +80,15 @@ The server reads the webhook URL from (checked in order):
 
 1. **`BITRIX24_WEBHOOK_URL`** environment variable — the full webhook URL
 2. **`BITRIX24_WEBHOOK_OP_REF`** environment variable — a 1Password reference (e.g. `op://Vault/Item/field`), resolved via `op` CLI at startup
+
+### Knowledge Base token (optional)
+
+To enable the `kb_*` tools, install [«База знаний и тестирование»](https://it-solution.ru/b24apps/prilozhenie_bitrix24_baza_znanii/) on your portal, obtain an integration token in the app's settings, and set one of:
+
+1. **`KB_API_TOKEN`** — the raw token string
+2. **`KB_API_TOKEN_OP_REF`** — a 1Password reference, same format as above
+
+If neither is set, KB tools are silently omitted and the rest of the server runs normally.
 
 ## Claude Code Integration
 
@@ -122,7 +141,7 @@ Add to your project's `.mcp.json`:
 
 ### Verify
 
-After restarting Claude Code, run `/mcp` to confirm the server is connected and all 23 tools are available.
+After restarting Claude Code, run `/mcp` to confirm the server is connected. You should see 23 tools, or 27 if the Knowledge Base token is configured.
 
 ## Development
 
@@ -145,6 +164,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | \
 src/
   index.ts            # entry point, auth, stdio transport
   bitrix-client.ts    # REST client with rate limiting (2 req/s) and pagination
+  kb-client.ts        # IT-Solution KB API client (optional, activated by token)
   types.ts            # helpers (textResult, errorResult, zId, status/priority maps)
   tools/
     index.ts          # registers all tool modules
@@ -157,6 +177,8 @@ src/
     crm-leads.ts      # crm.lead.*
     users.ts          # user.*
     workgroups.ts     # sonet_group.*
+    im-chat.ts        # im.chat.*
+    kb-articles.ts    # IT-Solution KB: article.*, directory.*, gpt.ask
 ```
 
 ### Bitrix24 API Notes

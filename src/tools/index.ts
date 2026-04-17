@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { BitrixClient } from "../bitrix-client.js";
+import type { KbClient } from "../kb-client.js";
 import { registerTaskTools } from "./tasks.js";
 import { registerTaskCommentTools } from "./task-comments.js";
 import { registerTaskChecklistTools } from "./task-checklist.js";
@@ -10,8 +11,9 @@ import { registerCrmLeadTools } from "./crm-leads.js";
 import { registerUserTools } from "./users.js";
 import { registerWorkgroupTools } from "./workgroups.js";
 import { registerImChatTools } from "./im-chat.js";
+import { registerKbTools } from "./kb-articles.js";
 
-export function registerAllTools(server: McpServer, client: BitrixClient): void {
+export function registerAllTools(server: McpServer, client: BitrixClient, kbClient?: KbClient): void {
   registerTaskTools(server, client);
   registerTaskCommentTools(server, client);
   registerTaskChecklistTools(server, client);
@@ -22,4 +24,5 @@ export function registerAllTools(server: McpServer, client: BitrixClient): void 
   registerUserTools(server, client);
   registerWorkgroupTools(server, client);
   registerImChatTools(server, client);
+  if (kbClient) registerKbTools(server, kbClient);
 }
