@@ -39,8 +39,8 @@ export function registerKbTools(server: McpServer, client: KbClient): void {
     "kb_article_save",
     "Create or update a KB article. Omit `id` to create new (then `directoryId` is required). Pass `id` to update. Body is HTML (Froala editor format). Changes are live.",
     {
-      id: z.number().optional().describe("Article ID (omit to create)"),
-      directoryId: z.number().optional().describe("Target directory ID (required when creating)"),
+      id: z.coerce.number().optional().describe("Article ID (omit to create)"),
+      directoryId: z.coerce.number().optional().describe("Target directory ID (required when creating)"),
       title: z.string().optional().describe("Article title"),
       body: z.string().optional().describe("Article body as HTML"),
       public: z.boolean().optional().describe("Publish publicly"),
@@ -51,7 +51,7 @@ export function registerKbTools(server: McpServer, client: KbClient): void {
         if (args.id !== undefined) params.id = args.id;
         if (args.directoryId !== undefined) params.directory_id = args.directoryId;
         if (args.title !== undefined) params.title = args.title;
-        if (args.body !== undefined) params.rendered_body = args.body;
+        if (args.body !== undefined) params.body = args.body;
         if (args.public !== undefined) params.public = args.public;
         const data = await client.call("article.save", params);
         return textResult(data);
