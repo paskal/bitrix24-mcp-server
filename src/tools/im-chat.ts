@@ -77,6 +77,40 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
   );
 
   server.tool(
+    "bitrix24_im_message_delete",
+    "Delete a message from a Bitrix24 IM chat (including task chats). Pass the numeric message ID as returned by bitrix24_im_chat_messages or bitrix24_task_comment_list. Only the message author or admins can delete.",
+    {
+      messageId: z.number().describe("Numeric ID of the message to delete"),
+    },
+    async (args) => {
+      try {
+        const response = await client.call("im.message.delete", {
+          MESSAGE_ID: args.messageId,
+        });
+        return textResult(response.result === true ? "Deleted" : response.result);
+      } catch (e) { return errorResult(e); }
+    },
+  );
+
+  server.tool(
+    "bitrix24_im_message_update",
+    "Edit the text of a Bitrix24 IM chat message (including task chats). Pass the numeric message ID and the new text. Only the message author can edit.",
+    {
+      messageId: z.number().describe("Numeric ID of the message to edit"),
+      text: z.string().describe("New message text (BBCode supported, e.g. [USER=854]Name[/USER] for mentions)"),
+    },
+    async (args) => {
+      try {
+        const response = await client.call("im.message.update", {
+          MESSAGE_ID: args.messageId,
+          MESSAGE: args.text,
+        });
+        return textResult(response.result === true ? "Updated" : response.result);
+      } catch (e) { return errorResult(e); }
+    },
+  );
+
+  server.tool(
     "bitrix24_im_chat_search",
     "Search for IM chats by name/title. Useful for finding workgroup chats, project chats, or specific conversations.",
     {

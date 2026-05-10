@@ -24,6 +24,8 @@ const READONLY_WRITER_TOOLS: ReadonlySet<string> = new Set([
   "bitrix24_task_checklist_add",
   "bitrix24_task_checklist_complete",
   "bitrix24_task_comment_add",
+  "bitrix24_im_message_delete",
+  "bitrix24_im_message_update",
   "kb_article_save",
 ]);
 
