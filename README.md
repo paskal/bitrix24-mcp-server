@@ -188,6 +188,22 @@ src/
 - **Tasks API** uses camelCase field names; **CRM API** uses UPPER_CASE
 - **Batch API** (`batch()` method) executes up to 50 sub-requests in a single rate-limited call
 
+### Filter operator support (CRM list methods)
+
+When calling `bitrix24_crm_{deal,contact,lead}_list` (or any underlying `crm.*.list` endpoint), be careful which filter operators you trust. Verified on Bitrix24 cloud, May 2026:
+
+| Filter form | Works? | Notes |
+|---|---|---|
+| `filter[ID]=N` | ✅ | exact match |
+| `filter[!FIELD]=` (truthy / "is not empty") | ✅ | reliable for UF string fields — returns records where the value is non-empty |
+| `filter[FIELD]=` (empty string / "is empty") | ❌ | **silently misbehaves** — often returns records regardless of the field's actual value. Never trust it for "field is empty" semantics. Fetch and check the value client-side instead |
+| `filter[>=ID]=N` / `filter[>ID]=N` | ❌ | silently ignored — earliest existing ID returned regardless |
+| `filter[>=DATE_CREATE]=YYYY-MM-DD HH:MM:SS` (with time) | ❌ | silently ignored |
+| `filter[>DATE_CREATE]=YYYY-MM-DD` (date-only, strict greater-than) | ✅ | works — returns records with `DATE_CREATE > the given date` |
+| `order[ID]=DESC` / `order[DATE_CREATE]=ASC` | ✅ | both work |
+
+The most expensive trap is the "field is empty" one: a query like `filter[!UF_CRM_X]= AND filter[UF_CRM_Y]=` looks correct but the `UF_CRM_Y` empty constraint is silently dropped. The server returns thousands of candidates that all already have `UF_CRM_Y` populated — the count is meaningless. Always fetch a sample and client-filter on the actual value before quoting "to fix" counts to a user.
+
 ## Extending
 
 Add a new tool module:
