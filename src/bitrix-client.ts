@@ -90,6 +90,49 @@ export class BitrixClient {
     return { items: allItems, total };
   }
 
+  // Upload a local file to a Bitrix24 disk folder via the standard 2-step REST flow.
+  // Returns the new disk-file ID, suitable for use as "n<id>" in UF_TASK_WEBDAV_FILES.
+  async uploadFileToFolder(
+    folderId: number,
+    filePath: string,
+    fileName?: string,
+  ): Promise<{ diskFileId: number; name: string; size: number }> {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+
+    const absPath = path.resolve(filePath);
+    const stat = await fs.stat(absPath);
+    if (!stat.isFile()) throw new Error(`Not a file: ${absPath}`);
+    const buf = await fs.readFile(absPath);
+    const name = fileName ?? path.basename(absPath);
+
+    // Step 1: request an upload URL from B24
+    const step1 = await this.call<{ field: string; uploadUrl: string }>(
+      "disk.folder.uploadfile",
+      { id: folderId, data: { NAME: name, generateUniqueName: 1 } },
+    );
+    const uploadUrl = step1.result.uploadUrl;
+    if (!uploadUrl) throw new Error("disk.folder.uploadfile returned no uploadUrl");
+
+    // Step 2: POST file binary as multipart/form-data
+    const form = new FormData();
+    const blob = new Blob([new Uint8Array(buf)], { type: "application/octet-stream" });
+    form.append(step1.result.field ?? "file", blob, name);
+    const upResp = await fetch(uploadUrl, { method: "POST", body: form });
+    if (!upResp.ok) {
+      const text = await upResp.text();
+      throw new Error(`disk upload ${upResp.status}: ${text.substring(0, 300)}`);
+    }
+    const upJson = (await upResp.json()) as { result?: { ID?: number; NAME?: string; SIZE?: string } };
+    if (!upJson.result?.ID) throw new Error(`disk upload bad response: ${JSON.stringify(upJson).substring(0, 300)}`);
+
+    return {
+      diskFileId: Number(upJson.result.ID),
+      name: upJson.result.NAME ?? name,
+      size: Number(upJson.result.SIZE ?? stat.size),
+    };
+  }
+
   async batch<T = unknown>(commands: Record<string, string>): Promise<Record<string, T>> {
     const response = await this.call<{
       result: Record<string, T>;

@@ -140,4 +140,45 @@ export function registerTaskTools(server: McpServer, client: BitrixClient): void
       } catch (e) { return errorResult(e); }
     },
   );
+
+  server.tool(
+    "bitrix24_task_attach_file",
+    "Attach a local file (docx, pdf, image, anything) to a Bitrix24 task. Use this for delivering briefs, reports, screenshots, signed-off specs — anything that should land as a downloadable attachment on the task. The file becomes visible in the task chat as «<user> добавил файл» and stays linked to UF_TASK_WEBDAV_FILES. SAFE: existing attachments are preserved (read-merge-write); your file is appended, not replaced. Two-step under the hood: disk.folder.uploadfile → multipart POST → tasks.task.update with the merged UF_TASK_WEBDAV_FILES list (each id encoded as 'n<diskFileId>').",
+    {
+      taskId: zId.describe("Task ID"),
+      filePath: z.string().describe("Absolute local path to the file to upload (e.g. /tmp/brief.docx)"),
+      folderId: z.number().optional().describe("Disk folder ID to upload to. Default 732896 (shared 'Блог' folder, verified writable for user 854). Override only if you need the file in a specific workgroup folder."),
+      fileName: z.string().optional().describe("Override the file name visible in B24. Defaults to basename(filePath)."),
+    },
+    async (args) => {
+      try {
+        const folderId = args.folderId ?? 732896;
+        // step 1+2: upload to disk
+        const uploaded = await client.uploadFileToFolder(folderId, args.filePath, args.fileName);
+        // step 3a: read existing UF_TASK_WEBDAV_FILES (replace-semantics — must merge, not clobber)
+        const taskResp = await client.call<{ task: Record<string, unknown> }>("tasks.task.get", {
+          taskId: parseInt(args.taskId), select: ["ID", "UF_TASK_WEBDAV_FILES"],
+        });
+        const existingRaw = taskResp.result?.task?.ufTaskWebdavFiles;
+        const existing: string[] = Array.isArray(existingRaw)
+          ? existingRaw.map((v) => String(v))
+          : [];
+        // step 3b: append new id (in disk-id form 'n<id>') and write back
+        const merged = [...existing, `n${uploaded.diskFileId}`];
+        await client.call("tasks.task.update", {
+          taskId: parseInt(args.taskId),
+          fields: { UF_TASK_WEBDAV_FILES: merged },
+        });
+        return textResult({
+          ok: true,
+          taskId: args.taskId,
+          diskFileId: uploaded.diskFileId,
+          name: uploaded.name,
+          size: uploaded.size,
+          attachedCount: merged.length,
+          previousAttachmentCount: existing.length,
+        });
+      } catch (e) { return errorResult(e); }
+    },
+  );
 }

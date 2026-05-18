@@ -54,10 +54,10 @@ export function registerTaskCommentTools(server: McpServer, client: BitrixClient
 
   server.tool(
     "bitrix24_task_comment_add",
-    "Add a comment to a Bitrix24 task. Uses legacy forum API which posts to both the task chat and the comment section. The message will appear in the task's IM chat for all participants.",
+    "Add a comment to a Bitrix24 task. Uses legacy forum API which posts to both the task chat and the comment section. The message will appear in the task's IM chat for all participants. RETURNS the comment ID (numeric) — keep it: the same ID can later be passed to `bitrix24_task_comment_update` to edit, `bitrix24_task_comment_delete` to remove, or `bitrix24_im_message_update`/`bitrix24_im_message_delete` (same underlying message). To ATTACH A FILE to the task (docx brief, screenshot, pdf, etc.), do NOT try to inline it in the comment — use `bitrix24_task_attach_file` separately. Typical pattern: (1) attach the file, then (2) post a short comment referencing the attached file name. Comment text supports BBCode but NOT Markdown (backticks render literally, ** doesn't bold). Use [B]…[/B], [I]…[/I], [URL=…]…[/URL], [USER=ID]Name[/USER] for mentions.",
     {
       taskId: zId.describe("Task ID"),
-      text: z.string().describe("Comment text (BBCode supported, e.g. [USER=854]Name[/USER] for mentions)"),
+      text: z.string().describe("Comment text (BBCode only — no Markdown. Patterns: [B]bold[/B], [URL=…]text[/URL], [USER=854]Name[/USER])"),
     },
     async (args) => {
       try {
@@ -66,6 +66,40 @@ export function registerTaskCommentTools(server: McpServer, client: BitrixClient
           FIELDS: { POST_MESSAGE: args.text },
         });
         return textResult(response.result);
+      } catch (e) { return errorResult(e); }
+    },
+  );
+
+  server.tool(
+    "bitrix24_task_comment_update",
+    "Edit the text of an existing Bitrix24 task comment. Pass the comment ID returned by `bitrix24_task_comment_add` (it equals the IM message ID — task comments mirror 1:1 to the task's IM chat). Use this instead of posting a follow-up «UPD:» comment when you need to correct an earlier message. Only the comment's author can edit. Note: `task.commentitem.update` direct REST returns ACTION_NOT_ALLOWED for typical webhook scopes, so this tool internally calls `im.message.update` which works.",
+    {
+      commentId: z.number().describe("Comment ID returned by bitrix24_task_comment_add (same as IM message ID)"),
+      text: z.string().describe("New comment text (BBCode — same conventions as add)"),
+    },
+    async (args) => {
+      try {
+        const response = await client.call("im.message.update", {
+          MESSAGE_ID: args.commentId,
+          MESSAGE: args.text,
+        });
+        return textResult(response.result === true ? "Updated" : response.result);
+      } catch (e) { return errorResult(e); }
+    },
+  );
+
+  server.tool(
+    "bitrix24_task_comment_delete",
+    "Delete a Bitrix24 task comment by ID. Pass the comment ID returned by `bitrix24_task_comment_add`. The deleted comment is replaced by a «Это сообщение было удалено» placeholder in the task chat. Only the author or admins can delete. Internally calls `im.message.delete` (same reason as comment_update — direct task.commentitem.delete is action-not-allowed via webhook scope).",
+    {
+      commentId: z.number().describe("Comment ID returned by bitrix24_task_comment_add (same as IM message ID)"),
+    },
+    async (args) => {
+      try {
+        const response = await client.call("im.message.delete", {
+          MESSAGE_ID: args.commentId,
+        });
+        return textResult(response.result === true ? "Deleted" : response.result);
       } catch (e) { return errorResult(e); }
     },
   );
