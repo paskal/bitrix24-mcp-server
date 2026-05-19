@@ -133,33 +133,34 @@ export class BitrixClient {
     };
   }
 
-  // Post an IM message into a chat with inline-rendered IMAGE previews.
+  // Post an IM message into a chat with an inline-rendered IMAGE preview.
   //
   // Bitrix renders an image preview in chat ONLY for IM-message ATTACH blocks of shape
-  //   [{ IMAGE: [{ NAME, LINK }] }, ...]
-  // — each image is its OWN attach object (parallel attaches), not multiple images inside a
-  // single IMAGE array (that returns "Incorrect attach params"). Bitrix internally wraps each
-  // attach's top-level IMAGE into a single BLOCKS entry; passing an explicit BLOCKS wrapper
-  // at input ALSO returns "Incorrect attach params". Setting `FILE_ID[]=` or `UPLOAD_FILE_ID`
-  // on im.message.add silently fails — the message posts as plain text. Verified 2026-05-19
-  // by trial against fs-group.bitrix24.ru (task chat 183218, see B24 task 17868).
+  //   [{ IMAGE: [{ NAME, LINK }] }]
+  // — ONE image per message. Stacking multiple parallel attaches in a single message renders
+  // visually broken (the second image's preview placeholder shows as a torn-paper icon with
+  // a large empty area, even when the second file is accessible — verified 2026-05-19 in
+  // task chat 183218). Callers wanting multiple images should call this once per image.
+  //
+  // Other shapes that look right but silently fail:
+  //   - Multiple images inside one IMAGE array → "Incorrect attach params"
+  //   - Explicit BLOCKS wrapper around IMAGE → "Incorrect attach params"
+  //   - FILE_ID[] / UPLOAD_FILE_ID params → silently dropped, message posts as plain text
   //
   // The LINK must be a B24 disk showFile URL: https://<portal>/disk/showFile/<diskFileId>/
   // — the chat client knows how to fetch a preview from this in the user's auth context.
-  async postChatMessageWithImages(
+  async postChatMessageWithImage(
     chatId: number,
     message: string,
-    images: Array<{ diskFileId: number; name: string }>,
+    image: { diskFileId: number; name: string },
   ): Promise<{ messageId: number }> {
-    if (images.length === 0) throw new Error("postChatMessageWithImages: at least one image required");
     const portalBase = this.webhookUrl.replace(/\/rest\/.*$/, "");
-    const attach = images.map((img) => ({
-      IMAGE: [{ NAME: img.name, LINK: `${portalBase}/disk/showFile/${img.diskFileId}/` }],
-    }));
     const resp = await this.call<number>("im.message.add", {
       CHAT_ID: chatId,
       MESSAGE: message,
-      ATTACH: attach,
+      ATTACH: [{
+        IMAGE: [{ NAME: image.name, LINK: `${portalBase}/disk/showFile/${image.diskFileId}/` }],
+      }],
     });
     return { messageId: resp.result };
   }

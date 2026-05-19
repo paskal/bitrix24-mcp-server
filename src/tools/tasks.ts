@@ -184,11 +184,11 @@ export function registerTaskTools(server: McpServer, client: BitrixClient): void
 
   server.tool(
     "bitrix24_task_post_image",
-    "Post a chat message to a Bitrix24 task with one or more images that render INLINE as thumbnails (not just filename links). Use this for screenshots, design mockups, photo evidence — anything where the reader should see the image without clicking through. Each local file path is uploaded to disk, then a single chat message is posted with IMAGE attachment blocks so the chat client renders thumbnail previews directly. Returns the new IM message ID. Files are also saved to B24 disk (folder 732896 by default) so they're permanently accessible, but they are NOT added to UF_TASK_WEBDAV_FILES — for that, use `bitrix24_task_attach_file` separately. Posting two images = one message with two thumbnails (not two messages).",
+    "Post chat message(s) to a Bitrix24 task with images that render INLINE as thumbnails (not just filename links). Use this for screenshots, design mockups, photo evidence — anything where the reader should see the image without clicking through. Each local file path is uploaded to disk, then a SEPARATE chat message is posted per image (Bitrix renders multi-image single-messages with broken second-image placeholders — verified 2026-05-19). The same `message` caption is reused on each image's message; if you want per-image captions, call this tool once per image with a distinct message. Returns array of IM message IDs (one per image). Files are saved to B24 disk (folder 732896 by default) so they're permanently accessible, but NOT added to UF_TASK_WEBDAV_FILES — for that, use `bitrix24_task_attach_file` separately.",
     {
       taskId: zId.describe("Task ID to post into"),
-      message: z.string().describe("Message text shown above the image previews. Supports BBCode ([B]…[/B], [URL=…]…[/URL], [USER=ID]Name[/USER]). Use a short caption like «Скриншоты с прода:» — the images speak for themselves."),
-      filePaths: z.array(z.string()).min(1).describe("Array of absolute local paths to image files (PNG / JPG / WebP)"),
+      message: z.string().describe("Caption posted above each image. Same text on every message. Supports BBCode ([B]…[/B], [URL=…]…[/URL], [USER=ID]Name[/USER]). For distinct per-image captions, call this tool multiple times with single-element filePaths arrays."),
+      filePaths: z.array(z.string()).min(1).describe("Array of absolute local paths to image files (PNG / JPG / WebP). One message posted per file."),
       folderId: z.number().optional().describe("Disk folder ID for upload. Default 732896 (shared 'Блог' folder, verified writable for user 854)."),
     },
     async (args) => {
@@ -202,21 +202,21 @@ export function registerTaskTools(server: McpServer, client: BitrixClient): void
           ?? (taskResp.result?.task as Record<string, unknown>)?.CHAT_ID;
         const chatId = Number(chatIdRaw);
         if (!chatId) throw new Error(`Task ${args.taskId} has no associated chat ID (got ${JSON.stringify(chatIdRaw)})`);
-        // step 2: upload each file to disk
-        const uploaded: Array<{ diskFileId: number; name: string }> = [];
+        // step 2 + 3: for each file, upload then post a single-image message (multi-attach renders broken)
+        const posted: Array<{ messageId: number; diskFileId: number; name: string }> = [];
         for (const filePath of args.filePaths) {
           const u = await client.uploadFileToFolder(folderId, filePath);
-          uploaded.push({ diskFileId: u.diskFileId, name: u.name });
+          const { messageId } = await client.postChatMessageWithImage(chatId, args.message, {
+            diskFileId: u.diskFileId, name: u.name,
+          });
+          posted.push({ messageId, diskFileId: u.diskFileId, name: u.name });
         }
-        // step 3: post a chat message with IMAGE attachments rendering inline
-        const { messageId } = await client.postChatMessageWithImages(chatId, args.message, uploaded);
         return textResult({
           ok: true,
           taskId: args.taskId,
           chatId,
-          messageId,
-          imageCount: uploaded.length,
-          uploaded: uploaded.map((u) => ({ diskFileId: u.diskFileId, name: u.name })),
+          imageCount: posted.length,
+          messages: posted,
         });
       } catch (e) { return errorResult(e); }
     },
