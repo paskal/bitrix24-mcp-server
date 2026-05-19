@@ -27,6 +27,7 @@ const READONLY_WRITER_TOOLS: ReadonlySet<string> = new Set([
   "bitrix24_task_comment_update",
   "bitrix24_task_comment_delete",
   "bitrix24_task_attach_file",
+  "bitrix24_task_post_image",
   "bitrix24_im_message_delete",
   "bitrix24_im_message_update",
   "kb_article_save",

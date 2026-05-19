@@ -143,7 +143,7 @@ export function registerTaskTools(server: McpServer, client: BitrixClient): void
 
   server.tool(
     "bitrix24_task_attach_file",
-    "Attach a local file (docx, pdf, image, anything) to a Bitrix24 task. Use this for delivering briefs, reports, screenshots, signed-off specs — anything that should land as a downloadable attachment on the task. The file becomes visible in the task chat as «<user> добавил файл» and stays linked to UF_TASK_WEBDAV_FILES. SAFE: existing attachments are preserved (read-merge-write); your file is appended, not replaced. Two-step under the hood: disk.folder.uploadfile → multipart POST → tasks.task.update with the merged UF_TASK_WEBDAV_FILES list (each id encoded as 'n<diskFileId>').",
+    "Attach a local file (docx, pdf, image, anything) to a Bitrix24 task. Use this for delivering briefs, reports, signed-off specs — anything that should land as a downloadable attachment in the task's Files tab. The file shows as «<user> добавил файл» in chat but WITHOUT an image thumbnail/preview even for PNG/JPG (chat just shows filename). For screenshots / images you want INLINE-PREVIEWED in chat, use `bitrix24_task_post_image` instead — that posts a proper chat message with IMAGE attachment blocks that render as thumbnails. Stays linked to UF_TASK_WEBDAV_FILES. SAFE: existing attachments are preserved (read-merge-write); your file is appended, not replaced. Two-step under the hood: disk.folder.uploadfile → multipart POST → tasks.task.update with the merged UF_TASK_WEBDAV_FILES list (each id encoded as 'n<diskFileId>').",
     {
       taskId: zId.describe("Task ID"),
       filePath: z.string().describe("Absolute local path to the file to upload (e.g. /tmp/brief.docx)"),
@@ -177,6 +177,46 @@ export function registerTaskTools(server: McpServer, client: BitrixClient): void
           size: uploaded.size,
           attachedCount: merged.length,
           previousAttachmentCount: existing.length,
+        });
+      } catch (e) { return errorResult(e); }
+    },
+  );
+
+  server.tool(
+    "bitrix24_task_post_image",
+    "Post a chat message to a Bitrix24 task with one or more images that render INLINE as thumbnails (not just filename links). Use this for screenshots, design mockups, photo evidence — anything where the reader should see the image without clicking through. Each local file path is uploaded to disk, then a single chat message is posted with IMAGE attachment blocks so the chat client renders thumbnail previews directly. Returns the new IM message ID. Files are also saved to B24 disk (folder 732896 by default) so they're permanently accessible, but they are NOT added to UF_TASK_WEBDAV_FILES — for that, use `bitrix24_task_attach_file` separately. Posting two images = one message with two thumbnails (not two messages).",
+    {
+      taskId: zId.describe("Task ID to post into"),
+      message: z.string().describe("Message text shown above the image previews. Supports BBCode ([B]…[/B], [URL=…]…[/URL], [USER=ID]Name[/USER]). Use a short caption like «Скриншоты с прода:» — the images speak for themselves."),
+      filePaths: z.array(z.string()).min(1).describe("Array of absolute local paths to image files (PNG / JPG / WebP)"),
+      folderId: z.number().optional().describe("Disk folder ID for upload. Default 732896 (shared 'Блог' folder, verified writable for user 854)."),
+    },
+    async (args) => {
+      try {
+        const folderId = args.folderId ?? 732896;
+        // step 1: fetch task to get its chat ID
+        const taskResp = await client.call<{ task: Record<string, unknown> }>("tasks.task.get", {
+          taskId: parseInt(args.taskId), select: ["ID", "CHAT_ID"],
+        });
+        const chatIdRaw = (taskResp.result?.task as Record<string, unknown>)?.chatId
+          ?? (taskResp.result?.task as Record<string, unknown>)?.CHAT_ID;
+        const chatId = Number(chatIdRaw);
+        if (!chatId) throw new Error(`Task ${args.taskId} has no associated chat ID (got ${JSON.stringify(chatIdRaw)})`);
+        // step 2: upload each file to disk
+        const uploaded: Array<{ diskFileId: number; name: string }> = [];
+        for (const filePath of args.filePaths) {
+          const u = await client.uploadFileToFolder(folderId, filePath);
+          uploaded.push({ diskFileId: u.diskFileId, name: u.name });
+        }
+        // step 3: post a chat message with IMAGE attachments rendering inline
+        const { messageId } = await client.postChatMessageWithImages(chatId, args.message, uploaded);
+        return textResult({
+          ok: true,
+          taskId: args.taskId,
+          chatId,
+          messageId,
+          imageCount: uploaded.length,
+          uploaded: uploaded.map((u) => ({ diskFileId: u.diskFileId, name: u.name })),
         });
       } catch (e) { return errorResult(e); }
     },
