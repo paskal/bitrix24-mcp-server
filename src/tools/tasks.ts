@@ -28,7 +28,7 @@ export function registerTaskTools(server: McpServer, client: BitrixClient): void
         .describe("Bitrix24 filter, e.g. {RESPONSIBLE_ID: 854, '!REAL_STATUS': [5,6]}"),
       select: z.array(z.string()).optional().describe("Fields to return"),
       order: z.record(z.string(), z.string()).optional().describe("Sort order, e.g. {DEADLINE: 'asc'}"),
-      limit: z.number().optional().describe("Max tasks to return (default: all, paginated)"),
+      limit: z.number().optional().describe("Max tasks to return. WITHOUT this the tool returns at most 1000 (20 pages x 50) and silently truncates — 'total' shows the true match count. For a query that matches more, pass limit >= total."),
     },
     async (args) => {
       try {
