@@ -3,6 +3,36 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { BitrixClient } from "../bitrix-client.js";
 import { textResult, errorResult } from "../types.js";
 
+// Default ceiling on how many images bitrix24_im_chat_messages inlines per read,
+// so a long chat with many attachments doesn't blow up the response.
+const DEFAULT_MAX_INLINE_IMAGES = 20;
+// Skip inlining (just note + offer the id) above this size to avoid huge base64 payloads.
+const MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
+
+// MCP content blocks the chat tools can emit.
+type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
+// Fetch a chat/disk file's raw bytes via the REST disk.file.get -> DOWNLOAD_URL flow.
+// The urlShow/urlDownload returned inside im.dialog.messages.get are session-signed
+// (302 -> login for a webhook), so they can't be fetched headless; DOWNLOAD_URL carries
+// the webhook token and serves the original bytes directly.
+async function fetchDiskFile(
+  client: BitrixClient,
+  fileId: number | string,
+): Promise<{ buffer: Buffer; mime: string; name: string } | null> {
+  const resp = await client.call<Record<string, unknown>>("disk.file.get", { id: fileId });
+  const res = resp.result;
+  const url = res?.DOWNLOAD_URL;
+  if (typeof url !== "string") return null;
+  const dl = await fetch(url);
+  if (!dl.ok) return null;
+  const buffer = Buffer.from(await dl.arrayBuffer());
+  const mime = (dl.headers.get("content-type") ?? "application/octet-stream").split(";")[0].trim();
+  return { buffer, mime, name: String(res?.NAME ?? fileId) };
+}
+
 export function registerImChatTools(server: McpServer, client: BitrixClient): void {
   server.tool(
     "bitrix24_im_chat_list",
@@ -43,11 +73,13 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
 
   server.tool(
     "bitrix24_im_chat_messages",
-    "Read messages from a Bitrix24 IM chat. Use for reading task chats, group chats, or 1-on-1 dialogs. For task chats, the DIALOG_ID is 'chatNNN' where NNN is the task's chatId field.",
+    "Read messages from a Bitrix24 IM chat. Use for reading task chats, group chats, or 1-on-1 dialogs. For task chats, the DIALOG_ID is 'chatNNN' where NNN is the task's chatId field. Messages with attachments carry a 'files' array (fileId, name, type, dimensions); image attachments are inlined as viewable images by default so you see what a human reading the chat sees. Non-image files and over-sized images are listed by metadata — fetch them with bitrix24_im_file_get.",
     {
       dialogId: z.string().describe("Dialog ID: 'chatNNN' for group/task chats, or user ID as string for 1-on-1"),
       limit: z.number().optional().describe("Max messages to return (default: 20)"),
       firstId: z.number().optional().describe("Message ID to start from (for pagination — pass the smallest ID from previous response to go further back in history)"),
+      includeImages: z.boolean().optional().describe("Inline image attachments as viewable images (default: true). Set false for a text-only, lower-token read."),
+      maxImages: z.number().optional().describe(`Cap on inlined images per read (default: ${DEFAULT_MAX_INLINE_IMAGES}).`),
     },
     async (args) => {
       try {
@@ -65,13 +97,68 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
         const users = (result.users as Array<Record<string, unknown>>) ?? [];
         const userMap = new Map(users.map((u) => [String(u.id), u.name ?? u.first_name]));
 
-        const formatted = messages.map((m) => ({
-          id: m.id,
-          author: userMap.get(String(m.author_id)) ?? m.author_id,
-          date: m.date,
-          text: typeof m.text === "string" ? m.text.replace(/<[^>]+>/g, "").replace(/\[(?!USER)[^\]]+\]/g, "").trim() : m.text,
-        }));
-        return textResult(formatted);
+        // im.dialog.messages.get returns a flat files[] array; a message links its
+        // attachments via params.FILE_ID. Build a lookup so we can surface them.
+        const files = (result.files as Array<Record<string, unknown>>) ?? [];
+        const fileMap = new Map(files.map((f) => [String(f.id), f]));
+
+        const messageFileIds = (m: Record<string, unknown>): string[] => {
+          const p = (m.params as Record<string, unknown>) ?? {};
+          const ids = p.FILE_ID;
+          return Array.isArray(ids) ? ids.map(String) : [];
+        };
+
+        const formatted = messages.map((m) => {
+          const attached = messageFileIds(m)
+            .map((id) => fileMap.get(id))
+            .filter((f): f is Record<string, unknown> => Boolean(f))
+            .map((f) => ({
+              fileId: f.id,
+              name: f.name,
+              type: f.type,
+              ...(f.image ? { dimensions: f.image } : {}),
+              size: f.size,
+            }));
+          return {
+            id: m.id,
+            author: userMap.get(String(m.author_id)) ?? m.author_id,
+            date: m.date,
+            text: typeof m.text === "string" ? m.text.replace(/<[^>]+>/g, "").replace(/\[(?!USER)[^\]]+\]/g, "").trim() : m.text,
+            ...(attached.length ? { files: attached } : {}),
+          };
+        });
+
+        const content: ContentBlock[] = [{ type: "text", text: JSON.stringify(formatted, null, 2) }];
+
+        const includeImages = args.includeImages ?? true;
+        const maxImages = args.maxImages ?? DEFAULT_MAX_INLINE_IMAGES;
+        if (includeImages) {
+          // Inline oldest-first, matching natural reading order.
+          let count = 0;
+          let capped = false;
+          for (const m of [...messages].reverse()) {
+            if (count >= maxImages) { capped = true; break; }
+            for (const id of messageFileIds(m)) {
+              const f = fileMap.get(id);
+              if (!f || f.type !== "image") continue;
+              if (count >= maxImages) { capped = true; break; }
+              const fetched = await fetchDiskFile(client, id);
+              if (!fetched || !fetched.mime.startsWith("image/")) continue;
+              if (fetched.buffer.length > MAX_INLINE_IMAGE_BYTES) {
+                content.push({ type: "text", text: `[image "${fetched.name}" on msg ${String(m.id)} is ${fetched.buffer.length} bytes — too large to inline; fetch with bitrix24_im_file_get fileId ${id}]` });
+                continue;
+              }
+              content.push({ type: "text", text: `▼ image on msg ${String(m.id)} (${fetched.name}, ${String(m.date ?? "")}):` });
+              content.push({ type: "image", data: fetched.buffer.toString("base64"), mimeType: fetched.mime });
+              count++;
+            }
+          }
+          if (capped) {
+            content.push({ type: "text", text: `[inlined first ${maxImages} images; fetch the rest individually with bitrix24_im_file_get]` });
+          }
+        }
+
+        return { content };
       } catch (e) { return errorResult(e); }
     },
   );
@@ -135,6 +222,36 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
           lastMessageDate: chat.date_last_message,
         }));
         return textResult(formatted);
+      } catch (e) { return errorResult(e); }
+    },
+  );
+
+  server.tool(
+    "bitrix24_im_file_get",
+    "Fetch a single file attached to a Bitrix24 chat message by its fileId (from bitrix24_im_chat_messages files[].fileId). Images are returned as viewable image content; other file types return metadata plus a webhook-authenticated download URL. Use this for attachments bitrix24_im_chat_messages didn't inline (non-images, or images past the inline size/count cap).",
+    {
+      fileId: z.number().describe("Numeric disk file ID from a chat message's files[] entry"),
+    },
+    async (args) => {
+      try {
+        const resp = await client.call<Record<string, unknown>>("disk.file.get", { id: args.fileId });
+        const res = resp.result;
+        const url = res?.DOWNLOAD_URL;
+        if (typeof url !== "string") return textResult("File not found or no download URL available");
+        const dl = await fetch(url);
+        if (!dl.ok) return errorResult(new Error(`download failed: HTTP ${dl.status}`));
+        const mime = (dl.headers.get("content-type") ?? "application/octet-stream").split(";")[0].trim();
+        const buffer = Buffer.from(await dl.arrayBuffer());
+        const name = String(res?.NAME ?? args.fileId);
+        if (mime.startsWith("image/") && buffer.length <= MAX_INLINE_IMAGE_BYTES) {
+          return {
+            content: [
+              { type: "text" as const, text: `${name} (${mime}, ${buffer.length} bytes)` },
+              { type: "image" as const, data: buffer.toString("base64"), mimeType: mime },
+            ],
+          };
+        }
+        return textResult({ name, mime, size: buffer.length, downloadUrl: url });
       } catch (e) { return errorResult(e); }
     },
   );
