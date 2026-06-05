@@ -164,6 +164,24 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
   );
 
   server.tool(
+    "bitrix24_im_message_send",
+    "Send a NEW Bitrix24 IM message. Use this to message a person privately (1-on-1) or post into a group/task chat — it's the send counterpart to bitrix24_im_message_update (edit) and bitrix24_im_message_delete. The message is sent under the webhook owner's identity. For a PRIVATE 1-on-1 message pass the recipient's numeric user ID as dialogId (e.g. '8' for Aleksandr); for a group/task chat pass 'chatNNN'. Returns the new message ID (reuse it with update/delete). BBCode supported: [B]bold[/B], [URL=...]text[/URL], [USER=ID]Name[/USER] mentions. To post a comment onto a TASK specifically, prefer bitrix24_task_comment_add (it also shows in the task comment section).",
+    {
+      dialogId: z.string().describe("Recipient: numeric user ID as a string for a private 1-on-1 message (e.g. '6'), or 'chatNNN' for a group/task chat"),
+      text: z.string().describe("Message text (BBCode supported; no Markdown)"),
+    },
+    async (args) => {
+      try {
+        const response = await client.call("im.message.add", {
+          DIALOG_ID: args.dialogId,
+          MESSAGE: args.text,
+        });
+        return textResult({ messageId: response.result });
+      } catch (e) { return errorResult(e); }
+    },
+  );
+
+  server.tool(
     "bitrix24_im_message_delete",
     "Delete a message from a Bitrix24 IM chat (including task chats). Pass the numeric message ID as returned by bitrix24_im_chat_messages or bitrix24_task_comment_list. Only the message author or admins can delete.",
     {
