@@ -1,6 +1,6 @@
 # Bitrix24 MCP Server
 
-An MCP (Model Context Protocol) server that exposes Bitrix24 REST API to AI assistants. Provides 34 tools for managing tasks, CRM entities, call recordings (incl. local transcription), users, workgroups, and Knowledge Base articles via Bitrix24's inbound webhook API.
+An MCP (Model Context Protocol) server that exposes Bitrix24 REST API to AI assistants. Provides 35 tools for managing tasks, CRM entities, call recordings (incl. local transcription), users, workgroups, and Knowledge Base articles via Bitrix24's inbound webhook API.
 
 ## Tools
 
@@ -36,10 +36,19 @@ An MCP (Model Context Protocol) server that exposes Bitrix24 REST API to AI assi
 
 > Note: Bitrix's own call **transcripts** and **BitrixGPT call scoring** are UI-only CoPilot features — not exposed by any Bitrix24 REST method (verified against all ~1170 webhook methods), so no tool can read or trigger them. Instead we download the recording and transcribe it ourselves — see below.
 
-### Call transcription (4)
-Transcription and note-saving are **separate** — transcribe never writes to Bitrix, so you can get a transcript (and label it) without committing anything. Two tiers: **basic** (Whisper-only, setup-less, no token) and **max** (dual transcript + diarization, needs an HF token).
+### Call transcription (5)
+Transcription and note-saving are **separate** — transcribe never writes to Bitrix, so you can get a transcript (and label it) without committing anything. **Three quality/speed tiers**, all decoding the audio **locally** (it never leaves the machine):
 
-- `bitrix24_call_transcribe` — **basic tier.** Transcribe a call recording **locally and fully offline** (audio never leaves the machine). Whisper large-v3, auto-bootstrapping venv, no token. Substitutes for Bitrix's UI-only transcription. Returns **raw, unlabelled** `{text, segments, responsibleId, direction}`. Speaker labelling is the calling model's call (it gets the manager via `responsibleId` and the client's name from the lead).
+| Tier | Tool | Models | Speed | Output |
+|---|---|---|---|---|
+| **fast** | `bitrix24_call_transcribe_fast` | GigaAM v2 only | ~5× real-time, fastest | raw lowercase, no punctuation, no speaker labels |
+| **default** | `bitrix24_call_transcribe` | Whisper large-v3 | slower | punctuated, readable, raw segments (no speaker labels) |
+| **max** | `bitrix24_call_transcribe_max` | GigaAM + Whisper + pyannote | slowest (3 models) | both transcripts + speaker-tagged turns to reconcile |
+
+Pick by need: **fast** for the quick gist (cheap, never hallucinates, but rough), **default** for a readable single transcript, **max** for the best possible (dual transcript + diarization the caller reconciles).
+
+- `bitrix24_call_transcribe_fast` — **fast tier.** Single model, **GigaAM v2** (Russian-native RNNT): ~5× real-time on CPU, never hallucinates, gets domain terms right. Raw lowercase / minimal punctuation / no speaker labels. Returns `{text, engine, responsibleId, direction}`. Brand names auto-normalised (вилюкс → Velux). **Requires** a light Python env (gigaam + soundfile + torch) at `B24_FAST_PYTHON`; if missing → `error_type: missing_deps`.
+- `bitrix24_call_transcribe` — **default tier.** Transcribe a call recording **locally and fully offline**. Whisper large-v3, auto-bootstrapping venv, no token. Substitutes for Bitrix's UI-only transcription. Returns **raw, unlabelled** `{text, segments, responsibleId, direction}`. Speaker labelling is the calling model's call (it gets the manager via `responsibleId` and the client's name from the lead).
 - `bitrix24_call_transcribe_max` — **max tier.** The highest-quality pipeline: **GigaAM v2** (RU-native, never hallucinates) + **Whisper large-v3** (`condition_on_previous_text=False` + domain hotwords, for punctuation/proper-nouns) + **pyannote diarization** (speaker turns). Returns **both transcripts + speaker-tagged segments** (`{whisper_text, gigaam_text, segments, speakers, reconcile_hint}`) for the calling model to reconcile into one clean transcript. Brand names auto-normalised (V-LUX / вилюкс → Velux). **Requires** a heavy Python env at `B24_MAX_PYTHON` (faster-whisper + gigaam + pyannote.audio + torch) and an HF token (`HF_TOKEN`/`B24_HF_TOKEN`) whose account accepted the pyannote gated models. Missing any of that → a clear `error_type` (`missing_hf_token` / `missing_deps` / `model_not_approved`) telling you exactly what to fix. See [Call transcription setup](#call-transcription-local--private).
 - `bitrix24_crm_timeline_note_get` — read the «заметка» on a timeline item (returns text or null). Check before saving.
 - `bitrix24_crm_timeline_note_save` — save the note on a timeline item (e.g. a call), so it appears at the item, not as a loose lead comment. **Anti-clobber safeguard:** default `mode='create'` will **not** overwrite an existing note — it writes your text to a local draft file and returns the existing note + a recommendation, so the caller decides. Re-call with `mode='replace'` (overwrite) or `mode='append'` (keep both). *(writer — hidden in `READONLY_MODE`)*
@@ -184,7 +193,7 @@ Add to your project's `.mcp.json`:
 
 ### Verify
 
-After restarting Claude Code, run `/mcp` to confirm the server is connected. You should see 23 tools, or 27 if the Knowledge Base token is configured.
+After restarting Claude Code, run `/mcp` to confirm the server is connected. You should see 31 tools, or 35 if the Knowledge Base token is configured.
 
 ## Development
 

@@ -40,6 +40,28 @@ function runMaxTranscribe(audioPath: string): Promise<MaxResult> {
   });
 }
 
+// Run the fast pipeline (GigaAM v2 only) on an audio file. Returns {text} or {error,error_type}.
+interface FastResult { text?: string; engine?: string; error?: string; error_type?: string }
+function runFastTranscribe(audioPath: string): Promise<FastResult> {
+  const python = process.env.B24_FAST_PYTHON || "python3";
+  const script = process.env.B24_FAST_SCRIPT || fileURLToPath(new URL("../../scripts/transcribe_fast.py", import.meta.url));
+  return new Promise((resolve, reject) => {
+    const proc = spawn(python, [script, audioPath], { stdio: ["ignore", "pipe", "pipe"], env: process.env });
+    let out = "", err = "";
+    proc.stdout.on("data", (c) => (out += c.toString()));
+    proc.stderr.on("data", (c) => (err += c.toString()));
+    proc.on("error", (e) => reject(new Error(`cannot spawn '${python}' for fast pipeline: ${e.message}`)));
+    proc.on("close", (code) => {
+      const line = out.trim().split("\n").filter(Boolean).pop() ?? "";
+      try {
+        resolve(JSON.parse(line) as FastResult);
+      } catch {
+        reject(new Error(`fast pipeline exited ${code}; no JSON output. stderr: ${err.substring(0, 400)}`));
+      }
+    });
+  });
+}
+
 // CRM owner-type names → Bitrix OWNER_TYPE_ID
 const OWNER_TYPE_ID: Record<string, number> = { lead: 1, deal: 2, contact: 3, company: 4 };
 // timeline-note ITEM_TYPE (verified live): 2 = activity note (the «заметка» on a call),
@@ -139,6 +161,49 @@ export function registerCallTranscribeTools(server: McpServer, client: BitrixCli
         const r = await runMaxTranscribe(audioPath);
         if (r.error) {
           // surface the actionable setup error (missing HF token / deps / model not approved)
+          return textResult({ activityId, ok: false, error: r.error, error_type: r.error_type });
+        }
+        let responsibleId: string | null = null, direction: string | null = null;
+        try {
+          const act = await client.call<{ RESPONSIBLE_ID: string; DIRECTION: string }>("crm.activity.get", { id: activityId });
+          responsibleId = act.result.RESPONSIBLE_ID ?? null;
+          direction = act.result.DIRECTION === "1" ? "incoming" : act.result.DIRECTION === "2" ? "outgoing" : null;
+        } catch { /* non-fatal */ }
+        return textResult({ activityId, recordingFileId: recId, responsibleId, direction, ...r });
+      } catch (e) {
+        return errorResult(e);
+      }
+    },
+  );
+
+  // --- FAST transcription (GigaAM-only; fastest, no token) ---
+  server.tool(
+    "bitrix24_call_transcribe_fast",
+    "FAST transcription of a CRM call — the quickest, cheapest tier. Runs a SINGLE local model, " +
+      "GigaAM v2 (Russian-native RNNT): ~5x real-time on CPU, never hallucinates, gets Russian domain " +
+      "terms right. Trade-off vs the default bitrix24_call_transcribe (Whisper): raw lowercase, minimal " +
+      "punctuation, NO speaker labels. Use it when you want the gist fast/cheap and don't need Whisper's " +
+      "punctuation or the max tier's dual-transcript + diarization. The three tiers: fast = GigaAM only " +
+      "(this) · default = Whisper large-v3 (slower, punctuated, readable) · max = both + diarization " +
+      "reconciled (best, slowest). Audio is decoded LOCALLY (never leaves the machine). Returns " +
+      "{text, engine, responsibleId, direction}; brand names auto-normalised (вилюкс → Velux). " +
+      "REQUIRES a Python env (gigaam + soundfile + torch) at B24_FAST_PYTHON — if missing, returns a " +
+      "clear error (error_type: missing_deps). Does NOT write to Bitrix; save with " +
+      "bitrix24_crm_timeline_note_save.",
+    {
+      activityId: zId.describe("The call activity ID (a VOXIMPLANT_CALL activity)"),
+    },
+    async (args) => {
+      try {
+        const activityId = parseInt(args.activityId);
+        const recId = await client.getCallRecordingFileId(activityId);
+        if (!recId) {
+          return textResult({ activityId, error: "no recording for this call (missed/declined or not recorded)" });
+        }
+        const { url } = await client.getDiskFileDownloadUrl(recId);
+        const audioPath = await client.downloadToTemp(url, ".mp3");
+        const r = await runFastTranscribe(audioPath);
+        if (r.error) {
           return textResult({ activityId, ok: false, error: r.error, error_type: r.error_type });
         }
         let responsibleId: string | null = null, direction: string | null = null;
