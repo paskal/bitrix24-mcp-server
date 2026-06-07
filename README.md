@@ -1,6 +1,6 @@
 # Bitrix24 MCP Server
 
-An MCP (Model Context Protocol) server that exposes Bitrix24 REST API to AI assistants. Provides 32 tools for managing tasks, CRM entities, call recordings (incl. local transcription), users, workgroups, and Knowledge Base articles via Bitrix24's inbound webhook API.
+An MCP (Model Context Protocol) server that exposes Bitrix24 REST API to AI assistants. Provides 33 tools for managing tasks, CRM entities, call recordings (incl. local transcription), users, workgroups, and Knowledge Base articles via Bitrix24's inbound webhook API.
 
 ## Tools
 
@@ -36,9 +36,12 @@ An MCP (Model Context Protocol) server that exposes Bitrix24 REST API to AI assi
 
 > Note: Bitrix's own call **transcripts** and **BitrixGPT call scoring** are UI-only CoPilot features — not exposed by any Bitrix24 REST method (verified against all ~1170 webhook methods), so no tool can read or trigger them. Instead we download the recording and transcribe it ourselves — see below.
 
-### Call transcription (2)
-- `bitrix24_call_transcribe` — transcribe a call recording **locally and fully offline** (audio never leaves the machine), optionally storing the transcript as the note **on the call itself**. Substitutes for Bitrix's UI-only transcription. Requires a local ASR env (see [Call transcription setup](#call-transcription-local--private)). Returns **raw, unlabelled** `{text, segments}` (Whisper segments by pause, not by speaker). Speaker labelling is intentionally **not** in the server — the calling model decides whether to add «who-said-what» labels (it already has the call's manager and client names from the activity/lead) and saves the result via `bitrix24_crm_timeline_note_save`.
-- `bitrix24_crm_timeline_note_save` — save the «заметка» note attached to a specific timeline item (e.g. a call), via `crm.timeline.note.save`. The note appears at the item, not as a loose lead comment. *(writer — hidden in `READONLY_MODE`)*
+### Call transcription (3)
+Transcription and note-saving are **separate** — transcribe never writes to Bitrix, so you can get a transcript (and label it) without committing anything.
+
+- `bitrix24_call_transcribe` — transcribe a call recording **locally and fully offline** (audio never leaves the machine). Substitutes for Bitrix's UI-only transcription. Requires a local ASR env (see [Call transcription setup](#call-transcription-local--private)). Returns **raw, unlabelled** `{text, segments, responsibleId, direction}` (Whisper splits by pause, not by speaker). Speaker labelling is intentionally **not** in the server — the calling model decides whether to add «who-said-what» labels (it gets the manager via `responsibleId` and the client's name from the lead).
+- `bitrix24_crm_timeline_note_get` — read the «заметка» on a timeline item (returns text or null). Check before saving.
+- `bitrix24_crm_timeline_note_save` — save the note on a timeline item (e.g. a call), so it appears at the item, not as a loose lead comment. **Anti-clobber safeguard:** default `mode='create'` will **not** overwrite an existing note — it writes your text to a local draft file and returns the existing note + a recommendation, so the caller decides. Re-call with `mode='replace'` (overwrite) or `mode='append'` (keep both). *(writer — hidden in `READONLY_MODE`)*
 
 ### Users & Workgroups (3)
 - `bitrix24_user_get` — get user(s) by ID or filter
