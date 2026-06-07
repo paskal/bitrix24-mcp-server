@@ -1,6 +1,6 @@
 # Bitrix24 MCP Server
 
-An MCP (Model Context Protocol) server that exposes Bitrix24 REST API to AI assistants. Provides 27 tools for managing tasks, CRM entities, users, workgroups, and Knowledge Base articles via Bitrix24's inbound webhook API.
+An MCP (Model Context Protocol) server that exposes Bitrix24 REST API to AI assistants. Provides 32 tools for managing tasks, CRM entities, call recordings (incl. local transcription), users, workgroups, and Knowledge Base articles via Bitrix24's inbound webhook API.
 
 ## Tools
 
@@ -26,10 +26,19 @@ An MCP (Model Context Protocol) server that exposes Bitrix24 REST API to AI assi
 - `bitrix24_task_stages_list` — list Kanban stages for a project
 - `bitrix24_task_stage_move` — move a task to a different stage
 
-### CRM (6)
+### CRM (9)
 - `bitrix24_crm_deal_list` / `bitrix24_crm_deal_get` — deals
 - `bitrix24_crm_contact_list` / `bitrix24_crm_contact_get` — contacts
 - `bitrix24_crm_lead_list` / `bitrix24_crm_lead_get` — leads
+- `bitrix24_crm_activity_list` — timeline activities (calls/emails/SMS) on a lead/deal; call log with direction, duration, recording files
+- `bitrix24_voximplant_statistic_get` — telephony call stats (duration, in/out, recording file id, transcript status)
+- `bitrix24_crm_timeline_comment_list` — manual timeline comments (manager notes)
+
+> Note: Bitrix's own call **transcripts** and **BitrixGPT call scoring** are UI-only CoPilot features — not exposed by any Bitrix24 REST method (verified against all ~1170 webhook methods), so no tool can read or trigger them. Instead we download the recording and transcribe it ourselves — see below.
+
+### Call transcription (2)
+- `bitrix24_call_transcribe` — transcribe a call recording **locally and fully offline** (audio never leaves the machine), optionally storing the transcript as the note **on the call itself**. Substitutes for Bitrix's UI-only transcription. Requires a local ASR env (see [Call transcription setup](#call-transcription-local--private)). Returns **raw, unlabelled** `{text, segments}` (Whisper segments by pause, not by speaker). Speaker labelling is intentionally **not** in the server — the calling model decides whether to add «who-said-what» labels (it already has the call's manager and client names from the activity/lead) and saves the result via `bitrix24_crm_timeline_note_save`.
+- `bitrix24_crm_timeline_note_save` — save the «заметка» note attached to a specific timeline item (e.g. a call), via `crm.timeline.note.save`. The note appears at the item, not as a loose lead comment. *(writer — hidden in `READONLY_MODE`)*
 
 ### Users & Workgroups (3)
 - `bitrix24_user_get` — get user(s) by ID or filter
@@ -89,6 +98,36 @@ To enable the `kb_*` tools, install [«База знаний и тестиров
 2. **`KB_API_TOKEN_OP_REF`** — a 1Password reference, same format as above
 
 If neither is set, KB tools are silently omitted and the rest of the server runs normally.
+
+### Call transcription (local & private)
+
+`bitrix24_call_transcribe` decodes call recordings **on the machine running this MCP** — the audio is never sent to any cloud service. It shells out to a bundled Python script (`scripts/transcribe.py`) that runs an ONNX speech-to-text model via `ffmpeg`.
+
+Why local: call recordings are customers' voices (personal data); keeping transcription offline avoids shipping PII to a third-party API and keeps it free.
+
+One-off setup:
+
+```bash
+# ffmpeg must be on PATH
+brew install ffmpeg            # or your platform's package manager
+
+# a Python venv with the ASR runtime
+python3 -m venv ~/.venvs/b24-asr
+~/.venvs/b24-asr/bin/pip install onnx-asr onnxruntime
+```
+
+The default model is **NVIDIA Parakeet TDT 0.6b v3 (int8)** — multilingual incl. Russian, fast (~real-time/17 on CPU). It reuses the model bundled by [Handy](https://github.com/cjpais/Handy) if installed; otherwise point `PARAKEET_MODEL_DIR` at your own copy. For higher Russian accuracy on noisy phone audio, swap the script for Whisper `large-v3` (slower) or GigaAM v2.
+
+Environment variables (all optional):
+
+| Var | Default | Purpose |
+|---|---|---|
+| `B24_TRANSCRIBE_PYTHON` | `python3` | Python interpreter with `onnx-asr` installed — set to `~/.venvs/b24-asr/bin/python` |
+| `B24_TRANSCRIBE_SCRIPT` | bundled `scripts/transcribe.py` | Override to use a different transcription script |
+| `PARAKEET_MODEL_DIR` | Handy's bundled v3-int8 model | ASR model directory |
+| `ASR_CHUNK_SECONDS` | `30` | Segment length (the TDT ONNX export can't stream long audio) |
+
+If the venv/model isn't set up, `bitrix24_call_transcribe` returns a clear error and the rest of the server is unaffected.
 
 ## Claude Code Integration
 

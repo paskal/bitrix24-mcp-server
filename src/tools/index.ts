@@ -8,6 +8,8 @@ import { registerTaskStageTools } from "./task-stages.js";
 import { registerCrmDealTools } from "./crm-deals.js";
 import { registerCrmContactTools } from "./crm-contacts.js";
 import { registerCrmLeadTools } from "./crm-leads.js";
+import { registerCrmActivityTools } from "./crm-activities.js";
+import { registerCallTranscribeTools } from "./call-transcribe.js";
 import { registerUserTools } from "./users.js";
 import { registerWorkgroupTools } from "./workgroups.js";
 import { registerImChatTools } from "./im-chat.js";
@@ -30,6 +32,7 @@ const READONLY_WRITER_TOOLS: ReadonlySet<string> = new Set([
   "bitrix24_task_post_image",
   "bitrix24_im_message_delete",
   "bitrix24_im_message_update",
+  "bitrix24_crm_timeline_note_save",
   "kb_article_save",
 ]);
 
@@ -61,6 +64,8 @@ export function registerAllTools(server: McpServer, client: BitrixClient, kbClie
   registerCrmDealTools(server, client);
   registerCrmContactTools(server, client);
   registerCrmLeadTools(server, client);
+  registerCrmActivityTools(server, client);
+  registerCallTranscribeTools(server, client);
   registerUserTools(server, client);
   registerWorkgroupTools(server, client);
   registerImChatTools(server, client);

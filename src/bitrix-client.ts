@@ -165,6 +165,42 @@ export class BitrixClient {
     return { messageId: resp.result };
   }
 
+  // Resolve the recording disk-file id for a call activity (Voximplant/Mango).
+  // Returns null when the call has no recording (missed/declined).
+  async getCallRecordingFileId(activityId: number): Promise<number | null> {
+    const resp = await this.call<Array<{ RECORD_FILE_ID?: string | number | null }>>(
+      "voximplant.statistic.get",
+      { FILTER: { CRM_ACTIVITY_ID: activityId } },
+    );
+    const rows = resp.result ?? [];
+    for (const r of rows) {
+      if (r.RECORD_FILE_ID) return Number(r.RECORD_FILE_ID);
+    }
+    return null;
+  }
+
+  // Get a disk file's authenticated download URL + name.
+  async getDiskFileDownloadUrl(fileId: number): Promise<{ name: string; url: string }> {
+    const resp = await this.call<{ NAME?: string; DOWNLOAD_URL?: string }>("disk.file.get", { id: fileId });
+    const url = resp.result?.DOWNLOAD_URL;
+    if (!url) throw new Error(`disk.file.get(${fileId}) returned no DOWNLOAD_URL`);
+    return { name: resp.result?.NAME ?? `file-${fileId}`, url };
+  }
+
+  // Download a (typically auth-tokened) URL to a temp file; returns the local path.
+  async downloadToTemp(url: string, suffix = ".mp3"): Promise<string> {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`download ${resp.status}: ${(await resp.text()).substring(0, 200)}`);
+    const buf = Buffer.from(await resp.arrayBuffer());
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "b24rec-"));
+    const out = path.join(dir, `recording${suffix}`);
+    await fs.writeFile(out, buf);
+    return out;
+  }
+
   async batch<T = unknown>(commands: Record<string, string>): Promise<Record<string, T>> {
     const response = await this.call<{
       result: Record<string, T>;
