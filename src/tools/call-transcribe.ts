@@ -2,10 +2,43 @@ import { z } from "zod";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { BitrixClient } from "../bitrix-client.js";
 import { textResult, errorResult, zId } from "../types.js";
 import { getTranscriberPool } from "../transcriber.js";
+
+// Run the max-quality pipeline (GigaAM + Whisper-antihall + pyannote) on an audio file.
+// Returns the parsed JSON; structured {error,error_type} objects are passed through so the tool
+// can surface a clear message (missing HF token, deps, or unapproved model).
+interface MaxResult {
+  whisper_text?: string; gigaam_text?: string;
+  segments?: Array<{ start: number; speaker: string; text: string }>;
+  speakers?: string[]; reconcile_hint?: string;
+  error?: string; error_type?: string;
+}
+function runMaxTranscribe(audioPath: string): Promise<MaxResult> {
+  const python = process.env.B24_MAX_PYTHON || "python3";
+  const script = process.env.B24_MAX_SCRIPT || fileURLToPath(new URL("../../scripts/transcribe_max.py", import.meta.url));
+  const env = { ...process.env };
+  if (process.env.B24_HF_TOKEN && !env.HF_TOKEN) env.HF_TOKEN = process.env.B24_HF_TOKEN;
+  return new Promise((resolve, reject) => {
+    const proc = spawn(python, [script, audioPath], { stdio: ["ignore", "pipe", "pipe"], env });
+    let out = "", err = "";
+    proc.stdout.on("data", (c) => (out += c.toString()));
+    proc.stderr.on("data", (c) => (err += c.toString()));
+    proc.on("error", (e) => reject(new Error(`cannot spawn '${python}' for max pipeline: ${e.message}`)));
+    proc.on("close", (code) => {
+      const line = out.trim().split("\n").filter(Boolean).pop() ?? "";
+      try {
+        resolve(JSON.parse(line) as MaxResult);
+      } catch {
+        reject(new Error(`max pipeline exited ${code}; no JSON output. stderr: ${err.substring(0, 400)}`));
+      }
+    });
+  });
+}
 
 // CRM owner-type names → Bitrix OWNER_TYPE_ID
 const OWNER_TYPE_ID: Record<string, number> = { lead: 1, deal: 2, contact: 3, company: 4 };
@@ -68,6 +101,53 @@ export function registerCallTranscribeTools(server: McpServer, client: BitrixCli
           /* non-fatal */
         }
         return textResult({ activityId, recordingFileId: recId, responsibleId, direction, segmentCount: segments.length, text, segments });
+      } catch (e) {
+        return errorResult(e);
+      }
+    },
+  );
+
+  // --- MAX-quality transcription (dual transcript + diarization; needs HF token) ---
+  server.tool(
+    "bitrix24_call_transcribe_max",
+    "MAX-quality transcription of a CRM call — the highest-fidelity pipeline, for when the basic " +
+      "bitrix24_call_transcribe isn't good enough. Runs THREE local models on the recording and returns the raw " +
+      "materials for you (the calling model) to reconcile into one clean transcript:\n" +
+      "• GigaAM v2 — Russian-native, never hallucinates, gets domain terms right (the reliable backbone)\n" +
+      "• Whisper large-v3 with condition_on_previous_text=False + domain hotwords — punctuation + proper nouns\n" +
+      "• pyannote diarization — speaker turns (who spoke when)\n" +
+      "Returns {whisper_text, gigaam_text, segments:[{start,speaker,text}], speakers, reconcile_hint}. " +
+      "YOU reconcile: keep Whisper for punctuation/proper-nouns, trust GigaAM where Whisper diverges into non-Russian " +
+      "garbage (hallucination), assign Менеджер/Клиент per speaker from content, fix diarization flips — then save with " +
+      "bitrix24_crm_timeline_note_save. Brand names are auto-normalised (V-LUX / вилюкс → Velux, etc.). " +
+      "REQUIRES: a heavy Python env (faster-whisper + gigaam + pyannote.audio + torch) at B24_MAX_PYTHON, and an HF token " +
+      "(env HF_TOKEN or B24_HF_TOKEN) whose account has accepted the pyannote gated-model terms. If any of that is " +
+      "missing the tool returns a clear, actionable error (error_type: missing_hf_token | missing_deps | " +
+      "model_not_approved) — fix that, then retry. Slower than basic (three models, no pooling).",
+    {
+      activityId: zId.describe("The call activity ID (a VOXIMPLANT_CALL activity)"),
+    },
+    async (args) => {
+      try {
+        const activityId = parseInt(args.activityId);
+        const recId = await client.getCallRecordingFileId(activityId);
+        if (!recId) {
+          return textResult({ activityId, error: "no recording for this call (missed/declined or not recorded)" });
+        }
+        const { url } = await client.getDiskFileDownloadUrl(recId);
+        const audioPath = await client.downloadToTemp(url, ".mp3");
+        const r = await runMaxTranscribe(audioPath);
+        if (r.error) {
+          // surface the actionable setup error (missing HF token / deps / model not approved)
+          return textResult({ activityId, ok: false, error: r.error, error_type: r.error_type });
+        }
+        let responsibleId: string | null = null, direction: string | null = null;
+        try {
+          const act = await client.call<{ RESPONSIBLE_ID: string; DIRECTION: string }>("crm.activity.get", { id: activityId });
+          responsibleId = act.result.RESPONSIBLE_ID ?? null;
+          direction = act.result.DIRECTION === "1" ? "incoming" : act.result.DIRECTION === "2" ? "outgoing" : null;
+        } catch { /* non-fatal */ }
+        return textResult({ activityId, recordingFileId: recId, responsibleId, direction, ...r });
       } catch (e) {
         return errorResult(e);
       }

@@ -1,6 +1,6 @@
 # Bitrix24 MCP Server
 
-An MCP (Model Context Protocol) server that exposes Bitrix24 REST API to AI assistants. Provides 33 tools for managing tasks, CRM entities, call recordings (incl. local transcription), users, workgroups, and Knowledge Base articles via Bitrix24's inbound webhook API.
+An MCP (Model Context Protocol) server that exposes Bitrix24 REST API to AI assistants. Provides 34 tools for managing tasks, CRM entities, call recordings (incl. local transcription), users, workgroups, and Knowledge Base articles via Bitrix24's inbound webhook API.
 
 ## Tools
 
@@ -36,10 +36,11 @@ An MCP (Model Context Protocol) server that exposes Bitrix24 REST API to AI assi
 
 > Note: Bitrix's own call **transcripts** and **BitrixGPT call scoring** are UI-only CoPilot features — not exposed by any Bitrix24 REST method (verified against all ~1170 webhook methods), so no tool can read or trigger them. Instead we download the recording and transcribe it ourselves — see below.
 
-### Call transcription (3)
-Transcription and note-saving are **separate** — transcribe never writes to Bitrix, so you can get a transcript (and label it) without committing anything.
+### Call transcription (4)
+Transcription and note-saving are **separate** — transcribe never writes to Bitrix, so you can get a transcript (and label it) without committing anything. Two tiers: **basic** (Whisper-only, setup-less, no token) and **max** (dual transcript + diarization, needs an HF token).
 
-- `bitrix24_call_transcribe` — transcribe a call recording **locally and fully offline** (audio never leaves the machine). Substitutes for Bitrix's UI-only transcription. Requires a local ASR env (see [Call transcription setup](#call-transcription-local--private)). Returns **raw, unlabelled** `{text, segments, responsibleId, direction}` (Whisper splits by pause, not by speaker). Speaker labelling is intentionally **not** in the server — the calling model decides whether to add «who-said-what» labels (it gets the manager via `responsibleId` and the client's name from the lead).
+- `bitrix24_call_transcribe` — **basic tier.** Transcribe a call recording **locally and fully offline** (audio never leaves the machine). Whisper large-v3, auto-bootstrapping venv, no token. Substitutes for Bitrix's UI-only transcription. Returns **raw, unlabelled** `{text, segments, responsibleId, direction}`. Speaker labelling is the calling model's call (it gets the manager via `responsibleId` and the client's name from the lead).
+- `bitrix24_call_transcribe_max` — **max tier.** The highest-quality pipeline: **GigaAM v2** (RU-native, never hallucinates) + **Whisper large-v3** (`condition_on_previous_text=False` + domain hotwords, for punctuation/proper-nouns) + **pyannote diarization** (speaker turns). Returns **both transcripts + speaker-tagged segments** (`{whisper_text, gigaam_text, segments, speakers, reconcile_hint}`) for the calling model to reconcile into one clean transcript. Brand names auto-normalised (V-LUX / вилюкс → Velux). **Requires** a heavy Python env at `B24_MAX_PYTHON` (faster-whisper + gigaam + pyannote.audio + torch) and an HF token (`HF_TOKEN`/`B24_HF_TOKEN`) whose account accepted the pyannote gated models. Missing any of that → a clear `error_type` (`missing_hf_token` / `missing_deps` / `model_not_approved`) telling you exactly what to fix. See [Call transcription setup](#call-transcription-local--private).
 - `bitrix24_crm_timeline_note_get` — read the «заметка» on a timeline item (returns text or null). Check before saving.
 - `bitrix24_crm_timeline_note_save` — save the note on a timeline item (e.g. a call), so it appears at the item, not as a loose lead comment. **Anti-clobber safeguard:** default `mode='create'` will **not** overwrite an existing note — it writes your text to a local draft file and returns the existing note + a recommendation, so the caller decides. Re-call with `mode='replace'` (overwrite) or `mode='append'` (keep both). *(writer — hidden in `READONLY_MODE`)*
 
