@@ -165,10 +165,10 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
 
   server.tool(
     "bitrix24_im_message_send",
-    "Send a NEW Bitrix24 IM message. Use this to message a person privately (1-on-1) or post into a group/task chat — it's the send counterpart to bitrix24_im_message_update (edit) and bitrix24_im_message_delete. The message is sent under the webhook owner's identity. For a PRIVATE 1-on-1 message pass the recipient's numeric user ID as dialogId (e.g. '8' for Aleksandr); for a group/task chat pass 'chatNNN'. Returns the new message ID (reuse it with update/delete). BBCode supported: [B]bold[/B], [URL=...]text[/URL], [USER=ID]Name[/USER] mentions. To post a comment onto a TASK specifically, prefer bitrix24_task_comment_add (it also shows in the task comment section).",
+    "Send a NEW Bitrix24 IM message. Use this to message a person privately (1-on-1) or post into a group/task chat — it's the send counterpart to bitrix24_im_message_update (edit) and bitrix24_im_message_delete. The message is sent under the webhook owner's identity. For a PRIVATE 1-on-1 message pass the recipient's numeric user ID as dialogId (e.g. '8' for Aleksandr); for a group/task chat pass 'chatNNN'. Returns the new message ID (reuse it with update/delete). FORMATTING — plain text + BBCode only; Bitrix does NOT parse Markdown (**bold**, `backticks`, # headings render literally). Supported: [B]bold[/B], [I]italic[/I], [U]under[/U], [S]strike[/S], [URL=...]text[/URL], [USER=ID]Name[/USER] mentions. For bullet lists put a literal • at the line start — [*]/[LIST] do NOT render in chat (they show as literal «[*]»); no tag exists for inline code/filename, wrap in «…». When attaching a file to a chat (the disk im.disk.file.commit MESSAGE caption), keep the caption to ONE short line and post any long explanation as a SEPARATE following message — captions render in an oversized font, so a multi-paragraph caption becomes a wall of text. To post a comment onto a TASK specifically, prefer bitrix24_task_comment_add (it also shows in the task comment section).",
     {
       dialogId: z.string().describe("Recipient: numeric user ID as a string for a private 1-on-1 message (e.g. '6'), or 'chatNNN' for a group/task chat"),
-      text: z.string().describe("Message text (BBCode supported; no Markdown)"),
+      text: z.string().describe("Message text — plain text + BBCode only, NO Markdown. Bullet lines start with • (not [*]). See tool description for the full formatting contract + the file-caption rule."),
     },
     async (args) => {
       try {
@@ -199,7 +199,7 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
 
   server.tool(
     "bitrix24_im_message_update",
-    "Edit the text of a Bitrix24 IM chat message (including task chats). Pass the numeric message ID and the new text. Only the message author can edit.",
+    "Edit the text of a Bitrix24 IM chat message (including task chats). Pass the numeric message ID and the new text. Only the message author can edit. Same formatting rules as bitrix24_im_message_send: plain text + BBCode only (no Markdown), bullet lines start with a literal • (not [*]).",
     {
       messageId: z.number().describe("Numeric ID of the message to edit"),
       text: z.string().describe("New message text (BBCode supported, e.g. [USER=854]Name[/USER] for mentions)"),
