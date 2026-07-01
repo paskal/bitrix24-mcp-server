@@ -165,6 +165,50 @@ export class BitrixClient {
     return { messageId: resp.result };
   }
 
+  // Post a local file (image or any file) into ANY chat — group, task, or 1-on-1 — as a
+  // NATIVE chat file message that renders an inline image preview for all members.
+  //
+  // Unlike postChatMessageWithImage (which uses an im.message.add ATTACH block pointing at a
+  // shared-folder showFile link, and so depends on that folder's ACL), this uploads the file
+  // into the CHAT'S OWN disk folder and commits it via im.disk.file.commit — the same flow the
+  // native B24 client uses, so every chat member can always see the preview. This is the
+  // reliable way to put an image into an arbitrary group chat (e.g. a workgroup/project chat).
+  //
+  // dialogId is the universal dialog identifier: "chatNNN" for group/task chats, or a numeric
+  // user id for a 1-on-1. Both im.disk.folder.get and im.disk.file.commit accept DIALOG_ID.
+  async postChatFile(
+    dialogId: string,
+    filePath: string,
+    message: string,
+    fileName?: string,
+  ): Promise<{ messageId: number; diskFileId: number }> {
+    // 1. Resolve the chat's own disk folder (files committed here are visible to all members).
+    const folderResp = await this.call<{ ID?: number | string }>("im.disk.folder.get", {
+      DIALOG_ID: dialogId,
+    });
+    const folderId = Number(folderResp.result?.ID);
+    if (!folderId) {
+      throw new Error(`im.disk.folder.get returned no folder for dialog ${dialogId}`);
+    }
+
+    // 2. Upload the file into that folder.
+    const up = await this.uploadFileToFolder(folderId, filePath, fileName);
+
+    // 3. Commit it as a chat message (renders inline for images).
+    const commitResp = await this.call<{ MESSAGE_ID?: number | string }>("im.disk.file.commit", {
+      DIALOG_ID: dialogId,
+      UPLOAD_ID: up.diskFileId,
+      MESSAGE: message,
+    });
+    const messageId = Number(commitResp.result?.MESSAGE_ID);
+    if (!messageId) {
+      throw new Error(
+        `im.disk.file.commit returned no MESSAGE_ID: ${JSON.stringify(commitResp.result).slice(0, 200)}`,
+      );
+    }
+    return { messageId, diskFileId: up.diskFileId };
+  }
+
   // Resolve the recording disk-file id for a call activity (Voximplant/Mango).
   // Returns null when the call has no recording (missed/declined).
   async getCallRecordingFileId(activityId: number): Promise<number | null> {

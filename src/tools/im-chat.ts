@@ -273,4 +273,24 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
       } catch (e) { return errorResult(e); }
     },
   );
+
+  server.tool(
+    "bitrix24_im_post_image",
+    "Post local image(s) (or any file) into a Bitrix24 chat so they render INLINE as a preview — works for a group/workgroup/project chat, a task chat, or a 1-on-1. This is the image counterpart to bitrix24_im_message_send (which is text-only) and the chat equivalent of bitrix24_task_post_image (which only posts into a TASK). Under the hood it uploads each file into the CHAT'S OWN disk folder and commits it (im.disk.folder.get → disk.folder.uploadfile → im.disk.file.commit) — the native-client flow, so every chat member can see the preview regardless of shared-folder permissions. One SEPARATE message is posted per file (Bitrix renders multiple images stacked in a single message with broken placeholders), and the same `message` caption is reused on each; for distinct captions call once per file. CAPTION RULE — the file-commit caption renders in an OVERSIZED font, so keep it to ONE short line and post any long explanation as a separate bitrix24_im_message_send message. Returns an array of the created message IDs. Same disclosure convention as bitrix24_im_message_send applies to any accompanying text message.",
+    {
+      dialogId: z.string().describe("Target chat: 'chatNNN' for a group/task chat, or a numeric user ID for a 1-on-1"),
+      filePaths: z.array(z.string()).min(1).describe("Absolute local path(s) to the image/file(s). One message is posted per file."),
+      message: z.string().optional().describe("Short one-line caption, reused on each file's message (see the caption rule). Optional — omit for no caption."),
+    },
+    async (args) => {
+      try {
+        const results: Array<{ file: string; messageId: number; diskFileId: number }> = [];
+        for (const filePath of args.filePaths) {
+          const r = await client.postChatFile(args.dialogId, filePath, args.message ?? "");
+          results.push({ file: filePath, messageId: r.messageId, diskFileId: r.diskFileId });
+        }
+        return textResult({ posted: results.length, messages: results });
+      } catch (e) { return errorResult(e); }
+    },
+  );
 }
