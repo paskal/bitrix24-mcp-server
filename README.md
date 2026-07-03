@@ -114,33 +114,50 @@ If neither is set, KB tools are silently omitted and the rest of the server runs
 
 ### Call transcription (local & private)
 
-`bitrix24_call_transcribe` decodes call recordings **on the machine running this MCP** — the audio is never sent to any cloud service. It shells out to a bundled Python script (`scripts/transcribe.py`) that runs an ONNX speech-to-text model via `ffmpeg`.
+All three transcription tiers decode call recordings **on the machine running this MCP** — the audio is never sent to any cloud service. Call recordings are customers' voices (personal data); keeping transcription offline avoids shipping PII to a third-party API and keeps it free.
 
-Why local: call recordings are customers' voices (personal data); keeping transcription offline avoids shipping PII to a third-party API and keeps it free.
+#### Default tier — zero setup
 
-One-off setup:
-
-```bash
-# ffmpeg must be on PATH
-brew install ffmpeg            # or your platform's package manager
-
-# a Python venv with the ASR runtime
-python3 -m venv ~/.venvs/b24-asr
-~/.venvs/b24-asr/bin/pip install onnx-asr onnxruntime
-```
-
-The default model is **NVIDIA Parakeet TDT 0.6b v3 (int8)** — multilingual incl. Russian, fast (~real-time/17 on CPU). It reuses the model bundled by [Handy](https://github.com/cjpais/Handy) if installed; otherwise point `PARAKEET_MODEL_DIR` at your own copy. For higher Russian accuracy on noisy phone audio, swap the script for Whisper `large-v3` (slower) or GigaAM v2.
+`bitrix24_call_transcribe` works out of the box. On first use the server bootstraps a managed Python venv at `~/.cache/bitrix24-mcp/whisper-venv`, installs [faster-whisper](https://github.com/SYSTRAN/faster-whisper) into it, and downloads the Whisper `large-v3` model (~3 GB) — so the first call is slow, and subsequent calls are served by a persistent worker pool that keeps the model loaded. The only prerequisite is a `python3` on `PATH` able to create venvs. No ffmpeg is needed for this tier (faster-whisper bundles PyAV for audio decoding).
 
 Environment variables (all optional):
 
 | Var | Default | Purpose |
 |---|---|---|
-| `B24_TRANSCRIBE_PYTHON` | `python3` | Python interpreter with `onnx-asr` installed — set to `~/.venvs/b24-asr/bin/python` |
-| `B24_TRANSCRIBE_SCRIPT` | bundled `scripts/transcribe.py` | Override to use a different transcription script |
-| `PARAKEET_MODEL_DIR` | Handy's bundled v3-int8 model | ASR model directory |
-| `ASR_CHUNK_SECONDS` | `30` | Segment length (the TDT ONNX export can't stream long audio) |
+| `B24_TRANSCRIBE_PYTHON` | — | Interpreter that already has `faster-whisper`; set it to skip the managed venv |
+| `B24_BOOTSTRAP_PYTHON` | `python3` | Base interpreter used to create the managed venv |
+| `B24_TRANSCRIBE_SCRIPT` | bundled `scripts/transcribe_worker.py` | Override the worker script |
+| `B24_TRANSCRIBE_CONCURRENCY` | CPU cores ÷ 4 | Parallel transcription workers |
+| `B24_WHISPER_MODEL` | `large-v3` | Whisper model name/size |
+| `B24_WHISPER_COMPUTE` | `int8` | ctranslate2 compute type |
+| `B24_WHISPER_LANG` | `ru` | Language hint; empty = autodetect |
 
-If the venv/model isn't set up, `bitrix24_call_transcribe` returns a clear error and the rest of the server is unaffected.
+#### Fast tier — one venv
+
+`bitrix24_call_transcribe_fast` runs [GigaAM v2](https://github.com/salute-developers/GigaAM), a Russian-only RNNT model (~5× real-time on CPU, never hallucinates; raw lowercase output). It needs a Python environment with `gigaam` — GigaAM requires Python < 3.13 (which pins a compatible torch) and shells out to the `ffmpeg` binary, so ffmpeg must be on `PATH`:
+
+```bash
+brew install ffmpeg            # or your platform's package manager
+python3.12 -m venv ~/.venvs/b24-giga
+~/.venvs/b24-giga/bin/pip install gigaam soundfile
+export B24_FAST_PYTHON=~/.venvs/b24-giga/bin/python
+```
+
+#### Max tier — heavy venv + HuggingFace token
+
+`bitrix24_call_transcribe_max` runs GigaAM + Whisper (with anti-hallucination settings and domain hotwords) + [pyannote](https://github.com/pyannote/pyannote-audio) speaker diarization, and returns both transcripts plus speaker-tagged segments for the calling model to reconcile. It needs everything from the fast tier plus `faster-whisper` and `pyannote.audio` in one environment, and a HuggingFace token whose account has accepted the gated model terms at [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) and [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0):
+
+```bash
+brew install ffmpeg            # or your platform's package manager
+python3.12 -m venv ~/.venvs/b24-max
+~/.venvs/b24-max/bin/pip install gigaam soundfile faster-whisper pyannote.audio
+export B24_MAX_PYTHON=~/.venvs/b24-max/bin/python
+export HF_TOKEN=hf_...         # or B24_HF_TOKEN
+```
+
+`B24_FAST_SCRIPT` / `B24_MAX_SCRIPT` override the bundled `scripts/transcribe_fast.py` / `scripts/transcribe_max.py`. Models for all tiers download lazily into `~/.cache/huggingface` on first use.
+
+If a tier's environment is missing, its tool returns a clear, actionable error (`error_type`: `missing_deps` / `missing_hf_token` / `model_not_approved`) and the rest of the server is unaffected.
 
 ## Claude Code Integration
 
