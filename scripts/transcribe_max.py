@@ -74,12 +74,16 @@ def gigaam_pass():
     if getattr(a, "ndim", 1) > 1:
         a = a[:, 0]
     parts = []
-    for i in range(0, len(a), 20 * sr):
-        sf.write("/tmp/_gmax.wav", a[i:i + 20 * sr], sr)
-        try:
-            parts.append(g.transcribe("/tmp/_gmax.wav"))
-        except Exception:  # noqa: BLE001
-            pass
+    # Chunk to GigaAM's ~20s cap, writing each chunk to a per-process temp dir so
+    # concurrent transcriptions never share (and corrupt) one fixed path.
+    with tempfile.TemporaryDirectory(prefix="gmax-") as td:
+        chunk_wav = os.path.join(td, "chunk.wav")
+        for i in range(0, len(a), 20 * sr):
+            sf.write(chunk_wav, a[i:i + 20 * sr], sr)
+            try:
+                parts.append(g.transcribe(chunk_wav))
+            except Exception:  # noqa: BLE001
+                pass
     return brand_normalize(" ".join(parts))
 
 

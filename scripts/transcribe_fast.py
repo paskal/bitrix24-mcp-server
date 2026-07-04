@@ -12,7 +12,7 @@ B24_FAST_PYTHON at a venv that has them.
 Output: a single JSON object on stdout. On any setup problem it is {"error","error_type"} so the
 MCP can surface a clear message. error_type ∈ missing_deps | bad_args | runtime_error
 """
-import os, sys, json, re
+import os, sys, json, re, tempfile
 
 
 def fail(error_type, msg):
@@ -52,13 +52,17 @@ try:
     if getattr(a, "ndim", 1) > 1:
         a = a[:, 0]
     parts = []
-    # GigaAM's RNNT export caps at ~20s of audio per call → chunk.
-    for i in range(0, len(a), 20 * sr):
-        sf.write("/tmp/_gfast.wav", a[i:i + 20 * sr], sr)
-        try:
-            parts.append(g.transcribe("/tmp/_gfast.wav"))
-        except Exception:  # noqa: BLE001
-            pass
+    # GigaAM's RNNT export caps at ~20s of audio per call → chunk. Each chunk is
+    # written to a per-process temp dir so concurrent transcriptions never share
+    # (and corrupt) one fixed path.
+    with tempfile.TemporaryDirectory(prefix="gfast-") as td:
+        chunk_wav = os.path.join(td, "chunk.wav")
+        for i in range(0, len(a), 20 * sr):
+            sf.write(chunk_wav, a[i:i + 20 * sr], sr)
+            try:
+                parts.append(g.transcribe(chunk_wav))
+            except Exception:  # noqa: BLE001
+                pass
     text = brand_normalize(" ".join(p for p in parts if p).strip())
 except Exception as e:  # noqa: BLE001
     fail("runtime_error", f"fast pipeline failed: {e}")
