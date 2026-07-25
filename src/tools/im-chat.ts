@@ -73,7 +73,7 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
 
   server.tool(
     "bitrix24_im_chat_messages",
-    "Read messages from a Bitrix24 IM chat. Use for reading task chats, group chats, or 1-on-1 dialogs. For task chats, the DIALOG_ID is 'chatNNN' where NNN is the task's chatId field. Messages with attachments carry a 'files' array (fileId, name, type, dimensions); image attachments are inlined as viewable images by default so you see what a human reading the chat sees. Non-image files and over-sized images are listed by metadata — fetch them with bitrix24_im_file_get.",
+    "Read messages from a Bitrix24 IM chat. Use for reading task chats, group chats, or 1-on-1 dialogs. For task chats, the DIALOG_ID is 'chatNNN' where NNN is the task's chatId field. Messages with attachments carry a 'files' array (fileId, name, type, dimensions); image attachments are inlined as viewable images by default so you see what a human reading the chat sees. Non-image files and over-sized images are listed by metadata — fetch them with bitrix24_im_file_get. ⚠️ TEXT FIELDS: 'text' is the display-rendered form with BBCode/HTML stripped — it is LOSSY. A message containing [URL=https://…]#146426[/URL] comes back as bare '#146426', and [USER=…] mentions and [B]bold[/B] are flattened the same way. When the original markup exists, the message also carries 'textRaw' with it intact. NEVER rebuild a message for bitrix24_im_message_update from 'text' — you will silently destroy every link, mention and format in it (caught 2026-07-24: an edited ads report lost all 8 CRM deep links). Edit from 'textRaw', or re-author the BBCode explicitly.",
     {
       dialogId: z.string().describe("Dialog ID: 'chatNNN' for group/task chats, or user ID as string for 1-on-1"),
       limit: z.number().optional().describe("Max messages to return (default: 20)"),
@@ -119,11 +119,20 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
               ...(f.image ? { dimensions: f.image } : {}),
               size: f.size,
             }));
+          // `text` is display-rendered (BBCode/HTML stripped) and is LOSSY — never feed it back
+          // into bitrix24_im_message_update, or links/mentions/bold are silently destroyed.
+          // `textRaw` preserves the original markup so an edit can round-trip losslessly.
+          const rawText = typeof m.text === "string" ? m.text : undefined;
+          const displayText =
+            rawText !== undefined
+              ? rawText.replace(/<[^>]+>/g, "").replace(/\[(?!USER)[^\]]+\]/g, "").trim()
+              : m.text;
           return {
             id: m.id,
             author: userMap.get(String(m.author_id)) ?? m.author_id,
             date: m.date,
-            text: typeof m.text === "string" ? m.text.replace(/<[^>]+>/g, "").replace(/\[(?!USER)[^\]]+\]/g, "").trim() : m.text,
+            text: displayText,
+            ...(rawText !== undefined && rawText !== displayText ? { textRaw: rawText } : {}),
             ...(attached.length ? { files: attached } : {}),
           };
         });
@@ -199,7 +208,7 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
 
   server.tool(
     "bitrix24_im_message_update",
-    "Edit the text of a Bitrix24 IM chat message (including task chats). Pass the numeric message ID and the new text. Only the message author can edit. Same formatting rules as bitrix24_im_message_send: plain text + BBCode only (no Markdown), bullet lines start with a literal • (not [*]). Keep the «(написано агентом)» disclosure line as the final line of the edited text (owner rule, favor-group).",
+    "Edit the text of a Bitrix24 IM chat message (including task chats). Pass the numeric message ID and the new text. Only the message author can edit. Same formatting rules as bitrix24_im_message_send: plain text + BBCode only (no Markdown), bullet lines start with a literal • (not [*]). Keep the «(написано агентом)» disclosure line as the final line of the edited text (owner rule, favor-group). ⚠️ The text you pass REPLACES the message wholesale — there is no merge. If you are editing an existing message, build the new text from that message's 'textRaw' (bitrix24_im_chat_messages), NOT from its 'text', which has BBCode stripped: round-tripping 'text' silently deletes every [URL=…] deep link, [USER=…] mention and [B]bold[/B]. Re-emit CRM references in full BBCode, e.g. [URL=https://fs-group.bitrix24.ru/crm/lead/details/NNNNN/]#NNNNN[/URL].",
     {
       messageId: z.number().describe("Numeric ID of the message to edit"),
       text: z.string().describe("New message text (BBCode supported, e.g. [USER=854]Name[/USER] for mentions)"),
@@ -276,7 +285,7 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
 
   server.tool(
     "bitrix24_im_post_image",
-    "Post local image(s) (or any file) into a Bitrix24 chat so they render INLINE as a preview — works for a group/workgroup/project chat, a task chat, or a 1-on-1. This is the image counterpart to bitrix24_im_message_send (which is text-only) and the chat equivalent of bitrix24_task_post_image (which only posts into a TASK). Under the hood it uploads each file into the CHAT'S OWN disk folder and commits it (im.disk.folder.get → disk.folder.uploadfile → im.disk.file.commit) — the native-client flow, so every chat member can see the preview regardless of shared-folder permissions. One SEPARATE message is posted per file (Bitrix renders multiple images stacked in a single message with broken placeholders), and the same `message` caption is reused on each; for distinct captions call once per file. CAPTION RULE — the file-commit caption renders in an OVERSIZED font, so keep it to ONE short line and post any long explanation as a separate bitrix24_im_message_send message. Returns an array of the created message IDs. Same disclosure convention as bitrix24_im_message_send applies to any accompanying text message.",
+    "Post local image(s) (or any file) into a Bitrix24 chat so they render INLINE as a preview — works for a group/workgroup/project chat, a task chat, or a 1-on-1. This is the image counterpart to bitrix24_im_message_send (which is text-only) and the chat equivalent of bitrix24_task_post_image (which only posts into a TASK). Under the hood it uploads each file into the CHAT'S OWN disk folder and commits it (im.disk.folder.get → disk.folder.uploadfile → im.disk.file.commit) — the native-client flow, so every chat member can see the preview regardless of shared-folder permissions. One SEPARATE message is posted per file (Bitrix renders multiple images stacked in a single message with broken placeholders), and the same `message` caption is reused on each; for distinct captions call once per file. CAPTION RULE — the file-commit caption renders in an OVERSIZED font, so keep it to ONE short line and post any long explanation as a separate bitrix24_im_message_send message. Returns an array of the created message IDs. Same disclosure convention as bitrix24_im_message_send applies to any accompanying text message. NOT IMAGE-ONLY despite the name — use it for ANY file you need to put in a chat (.txt/.docx/.pdf/.zip); non-images post as a normal downloadable file message with the caption. ALWAYS prefer this over hand-rolling the upload with curl: it uses a proper multipart encoder, so filenames containing commas, spaces or Cyrillic are handled correctly, whereas `curl -F 'file=@x;filename=a, b.txt'` treats the comma as a multi-file separator and dies with «curl: (26) Failed to open/read local data» (caught 2026-07-24).",
     {
       dialogId: z.string().describe("Target chat: 'chatNNN' for a group/task chat, or a numeric user ID for a 1-on-1"),
       filePaths: z.array(z.string()).min(1).describe("Absolute local path(s) to the image/file(s). One message is posted per file."),
