@@ -33,7 +33,7 @@ const READONLY_WRITER_TOOLS: ReadonlySet<string> = new Set([
   "bitrix24_im_message_send",
   "bitrix24_im_message_delete",
   "bitrix24_im_message_update",
-  "bitrix24_im_post_image",
+  "bitrix24_im_post_file",
   "bitrix24_crm_timeline_note_save",
   "kb_article_save",
 ]);
