@@ -220,6 +220,25 @@ npm run build        # compile to dist/
 npm run inspect      # open MCP Inspector UI
 ```
 
+### Deploying to the terrty agent host
+
+The agent containers there launch the server as `node /opt/b24-mcp/dist/index.js`, the
+**compiled** output, not `tsx src/`. `dist/` is gitignored, so a `git pull` alone ships
+nothing: the running agents keep the old behaviour and give no sign of it.
+
+```bash
+ssh terrty 'cd ~/bitrix24-mcp-server && git pull --ff-only origin master && npm run build'
+ssh terrty 'for c in fg-agent-dmitry fg-agent-maria fg-agent-aleksandr; do docker restart -t 30 "$c"; done'
+```
+
+The restart matters because the server is spawned over stdio by a long-lived agent session,
+so an already-running child keeps executing the old bundle until its parent restarts.
+Verify against a known record rather than trusting the build, for example a lead whose email
+carries a named attachment.
+
+Caught 2026-07-28: the attachment-resolution change was pulled but not built, so
+`dist/attachments.js` did not exist and the agents ran the previous version for hours.
+
 ### Testing manually
 
 ```bash
