@@ -15,6 +15,28 @@ type ContentBlock =
   | { type: "image"; data: string; mimeType: string };
 
 // Fetch a chat/disk file's raw bytes via the REST disk.file.get -> DOWNLOAD_URL flow.
+// Reactions live inside message.params keyed by reaction type, each value an array
+// of user ids: params: { LIKE: [8], FILE_ID: [...] }. Bitrix IM ships these seven
+// types (bitrix/modules/im/lib/v2/message/reaction). A reaction is often the whole
+// reply — a 👍 on «дозаполнив?» is a "yes" — so a chat read that drops them misreads
+// the conversation (caught 2026-08-28).
+export const REACTION_TYPES = ["LIKE", "KISS", "LAUGH", "ANGRY", "CRY", "FACEPALM", "WONDER"] as const;
+
+export function extractReactions(
+  params: Record<string, unknown> | null | undefined,
+  resolveUser: (id: string) => unknown,
+): Record<string, unknown[]> | undefined {
+  if (!params) return undefined;
+  const out: Record<string, unknown[]> = {};
+  for (const type of REACTION_TYPES) {
+    const ids = params[type];
+    if (Array.isArray(ids) && ids.length) {
+      out[type] = ids.map((id) => resolveUser(String(id)) ?? id);
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 // The urlShow/urlDownload returned inside im.dialog.messages.get are session-signed
 // (302 -> login for a webhook), so they can't be fetched headless; DOWNLOAD_URL carries
 // the webhook token and serves the original bytes directly.
@@ -73,7 +95,7 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
 
   server.tool(
     "bitrix24_im_chat_messages",
-    "Read messages from a Bitrix24 IM chat. Use for reading task chats, group chats, or 1-on-1 dialogs. For task chats, the DIALOG_ID is 'chatNNN' where NNN is the task's chatId field. Messages with attachments carry a 'files' array (fileId, name, type, dimensions); image attachments are inlined as viewable images by default so you see what a human reading the chat sees. Non-image files and over-sized images are listed by metadata — fetch them with bitrix24_im_file_get. ⚠️ TEXT FIELDS: 'text' is the display-rendered form with BBCode/HTML stripped — it is LOSSY. A message containing [URL=https://…]#146426[/URL] comes back as bare '#146426', and [USER=…] mentions and [B]bold[/B] are flattened the same way. When the original markup exists, the message also carries 'textRaw' with it intact. NEVER rebuild a message for bitrix24_im_message_update from 'text' — you will silently destroy every link, mention and format in it (caught 2026-07-24: an edited ads report lost all 8 CRM deep links). Edit from 'textRaw', or re-author the BBCode explicitly.",
+    "Read messages from a Bitrix24 IM chat. Use for reading task chats, group chats, or 1-on-1 dialogs. For task chats, the DIALOG_ID is 'chatNNN' where NNN is the task's chatId field. Messages carry a 'reactions' object when anyone reacted ({LIKE: ['Александр Верхотуров'], …}; types LIKE/KISS/LAUGH/ANGRY/CRY/FACEPALM/WONDER) — treat a reaction as a reply: a 👍 on a question is a 'yes', an unanswered message with a reaction is not unanswered. Messages with attachments carry a 'files' array (fileId, name, type, dimensions); image attachments are inlined as viewable images by default so you see what a human reading the chat sees. Non-image files and over-sized images are listed by metadata — fetch them with bitrix24_im_file_get. ⚠️ TEXT FIELDS: 'text' is the display-rendered form with BBCode/HTML stripped — it is LOSSY. A message containing [URL=https://…]#146426[/URL] comes back as bare '#146426', and [USER=…] mentions and [B]bold[/B] are flattened the same way. When the original markup exists, the message also carries 'textRaw' with it intact. NEVER rebuild a message for bitrix24_im_message_update from 'text' — you will silently destroy every link, mention and format in it (caught 2026-07-24: an edited ads report lost all 8 CRM deep links). Edit from 'textRaw', or re-author the BBCode explicitly.",
     {
       dialogId: z.string().describe("Dialog ID: 'chatNNN' for group/task chats, or user ID as string for 1-on-1"),
       limit: z.number().optional().describe("Max messages to return (default: 20)"),
@@ -122,6 +144,10 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
           // `text` is display-rendered (BBCode/HTML stripped) and is LOSSY — never feed it back
           // into bitrix24_im_message_update, or links/mentions/bold are silently destroyed.
           // `textRaw` preserves the original markup so an edit can round-trip losslessly.
+          const reactions = extractReactions(
+            m.params as Record<string, unknown> | undefined,
+            (id) => userMap.get(id),
+          );
           const rawText = typeof m.text === "string" ? m.text : undefined;
           const displayText =
             rawText !== undefined
@@ -134,6 +160,7 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
             text: displayText,
             ...(rawText !== undefined && rawText !== displayText ? { textRaw: rawText } : {}),
             ...(attached.length ? { files: attached } : {}),
+            ...(reactions ? { reactions } : {}),
           };
         });
 
