@@ -59,10 +59,7 @@ try:
         chunk_wav = os.path.join(td, "chunk.wav")
         for i in range(0, len(a), 20 * sr):
             sf.write(chunk_wav, a[i:i + 20 * sr], sr)
-            try:
-                parts.append(g.transcribe(chunk_wav))
-            except Exception:  # noqa: BLE001
-                pass
+            parts.append(g.transcribe(chunk_wav))
     text = brand_normalize(" ".join(p for p in parts if p).strip())
 except Exception as e:  # noqa: BLE001
     fail("runtime_error", f"fast pipeline failed: {e}")
