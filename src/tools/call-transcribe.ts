@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { BitrixClient } from "../bitrix-client.js";
+import { BitrixApiError, type BitrixClient } from "../bitrix-client.js";
 import { textResult, errorResult, zId } from "../types.js";
 import { getTranscriberPool } from "../transcriber.js";
 
@@ -80,8 +80,12 @@ async function getNoteText(
     });
     const t = (r.result?.text ?? "").trim();
     return t || null;
-  } catch {
-    return null; // NOT_FOUND = no note
+  } catch (e) {
+    // Only Bitrix's own NOT_FOUND means "no note on this item". Anything else (transport
+    // failure, auth, a 5xx) must propagate: treating it as absence lets note_save overwrite
+    // a note it never managed to read.
+    if (e instanceof BitrixApiError && e.code === "NOT_FOUND") return null;
+    throw e;
   }
 }
 

@@ -14,6 +14,16 @@ interface BitrixRawResponse {
   error_description?: string;
 }
 
+// A REST-level error from Bitrix24: the response carried an {error, error_description}
+// envelope (usually with a 4xx status). `code` is the Bitrix error code, e.g. NOT_FOUND,
+// so callers can tell "this thing does not exist" from every other failure.
+export class BitrixApiError extends Error {
+  constructor(message: string, readonly code: string, readonly status: number) {
+    super(message);
+    this.name = "BitrixApiError";
+  }
+}
+
 export class BitrixClient {
   private webhookUrl: string;
   private queue: Promise<void> = Promise.resolve();
@@ -40,15 +50,21 @@ export class BitrixClient {
             body: JSON.stringify(params ?? {}),
           });
 
-          if (!response.ok) {
-            const text = await response.text();
-            throw new Error(`Bitrix24 API ${response.status}: ${text}`);
+          // Bitrix answers errors with a 4xx status AND a JSON envelope, so parse the body
+          // first and fall back to the raw text for non-JSON failures (a gateway's HTML page).
+          const text = await response.text();
+          let data: BitrixRawResponse | undefined;
+          try {
+            data = JSON.parse(text) as BitrixRawResponse;
+          } catch {
+            data = undefined;
           }
 
-          const data = (await response.json()) as BitrixRawResponse;
-
-          if (data.error) {
-            throw new Error(`Bitrix24: ${data.error} — ${data.error_description ?? ""}`);
+          if (data?.error) {
+            throw new BitrixApiError(`Bitrix24: ${data.error} — ${data.error_description ?? ""}`, data.error, response.status);
+          }
+          if (!response.ok || !data) {
+            throw new Error(`Bitrix24 API ${response.status}: ${text.substring(0, 300)}`);
           }
 
           resolve(data as { result: T } & BitrixRawResponse);

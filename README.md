@@ -216,6 +216,7 @@ After restarting Claude Code, run `/mcp` to confirm the server is connected. You
 
 ```bash
 npm run typecheck    # type-check without emitting
+npm test             # regression tests (node:test via tsx, no live Bitrix)
 npm run build        # compile to dist/
 npm run inspect      # open MCP Inspector UI
 ```

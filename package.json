@@ -9,6 +9,7 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
     "build": "tsc",
     "inspect": "npx @modelcontextprotocol/inspector tsx src/index.ts"
   },
