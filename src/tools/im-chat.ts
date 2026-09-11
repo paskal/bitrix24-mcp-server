@@ -37,22 +37,44 @@ export function extractReactions(
   return Object.keys(out).length ? out : undefined;
 }
 
+// Resolve a chat/disk file via disk.file.get -> DOWNLOAD_URL and fetch it. The body is read
+// only for an image within maxBytes; anything else is described from the response headers and
+// the disk metadata and the transfer is cancelled unread, so a PDF or an oversized photo costs
+// one round-trip instead of a full download. Throws on an HTTP failure of the download itself.
+//
 // The urlShow/urlDownload returned inside im.dialog.messages.get are session-signed
 // (302 -> login for a webhook), so they can't be fetched headless; DOWNLOAD_URL carries
 // the webhook token and serves the original bytes directly.
+interface DiskFile { name: string; mime: string; size: number; downloadUrl: string; buffer?: Buffer }
+
 async function fetchDiskFile(
   client: BitrixClient,
   fileId: number | string,
-): Promise<{ buffer: Buffer; mime: string; name: string } | null> {
+  maxBytes = MAX_INLINE_IMAGE_BYTES,
+): Promise<DiskFile | null> {
   const resp = await client.call<Record<string, unknown>>("disk.file.get", { id: fileId });
   const res = resp.result;
   const url = res?.DOWNLOAD_URL;
   if (typeof url !== "string") return null;
   const dl = await fetch(url);
-  if (!dl.ok) return null;
-  const buffer = Buffer.from(await dl.arrayBuffer());
+  if (!dl.ok) {
+    await dl.body?.cancel();
+    throw new Error(`download failed: HTTP ${dl.status}`);
+  }
   const mime = (dl.headers.get("content-type") ?? "application/octet-stream").split(";")[0].trim();
-  return { buffer, mime, name: String(res?.NAME ?? fileId) };
+  const file: DiskFile = {
+    name: String(res?.NAME ?? fileId),
+    mime,
+    size: Number(res?.SIZE ?? dl.headers.get("content-length") ?? 0),
+    downloadUrl: url,
+  };
+  if (!mime.startsWith("image/") || file.size > maxBytes) {
+    await dl.body?.cancel();
+    return file;
+  }
+  const buffer = Buffer.from(await dl.arrayBuffer());
+  // the metadata can understate the size; the real byte count decides
+  return buffer.length > maxBytes ? { ...file, size: buffer.length } : { ...file, size: buffer.length, buffer };
 }
 
 export function registerImChatTools(server: McpServer, client: BitrixClient): void {
@@ -178,10 +200,16 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
               const f = fileMap.get(id);
               if (!f || f.type !== "image") continue;
               if (count >= maxImages) { capped = true; break; }
-              const fetched = await fetchDiskFile(client, id);
+              // the listing already carries the size: skip the round-trips for a known oversized image
+              if (Number(f.size ?? 0) > MAX_INLINE_IMAGE_BYTES) {
+                content.push({ type: "text", text: `[image "${String(f.name)}" on msg ${String(m.id)} is ${String(f.size)} bytes — too large to inline; fetch with bitrix24_im_file_get fileId ${id}]` });
+                continue;
+              }
+              // a failed download skips this one file; the rest of the chat still renders
+              const fetched = await fetchDiskFile(client, id).catch(() => null);
               if (!fetched || !fetched.mime.startsWith("image/")) continue;
-              if (fetched.buffer.length > MAX_INLINE_IMAGE_BYTES) {
-                content.push({ type: "text", text: `[image "${fetched.name}" on msg ${String(m.id)} is ${fetched.buffer.length} bytes — too large to inline; fetch with bitrix24_im_file_get fileId ${id}]` });
+              if (!fetched.buffer) {
+                content.push({ type: "text", text: `[image "${fetched.name}" on msg ${String(m.id)} is ${fetched.size} bytes — too large to inline; fetch with bitrix24_im_file_get fileId ${id}]` });
                 continue;
               }
               content.push({ type: "text", text: `▼ image on msg ${String(m.id)} (${fetched.name}, ${String(m.date ?? "")}):` });
@@ -288,24 +316,18 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
     },
     async (args) => {
       try {
-        const resp = await client.call<Record<string, unknown>>("disk.file.get", { id: args.fileId });
-        const res = resp.result;
-        const url = res?.DOWNLOAD_URL;
-        if (typeof url !== "string") return textResult("File not found or no download URL available");
-        const dl = await fetch(url);
-        if (!dl.ok) return errorResult(new Error(`download failed: HTTP ${dl.status}`));
-        const mime = (dl.headers.get("content-type") ?? "application/octet-stream").split(";")[0].trim();
-        const buffer = Buffer.from(await dl.arrayBuffer());
-        const name = String(res?.NAME ?? args.fileId);
-        if (mime.startsWith("image/") && buffer.length <= MAX_INLINE_IMAGE_BYTES) {
+        const file = await fetchDiskFile(client, args.fileId);
+        if (!file) return textResult("File not found or no download URL available");
+        const { name, mime, size, downloadUrl, buffer } = file;
+        if (buffer) {
           return {
             content: [
-              { type: "text" as const, text: `${name} (${mime}, ${buffer.length} bytes)` },
+              { type: "text" as const, text: `${name} (${mime}, ${size} bytes)` },
               { type: "image" as const, data: buffer.toString("base64"), mimeType: mime },
             ],
           };
         }
-        return textResult({ name, mime, size: buffer.length, downloadUrl: url });
+        return textResult({ name, mime, size, downloadUrl });
       } catch (e) { return errorResult(e); }
     },
   );
