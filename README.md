@@ -217,7 +217,7 @@ Add to your project's `.mcp.json`:
 
 ### Receiving new chat messages
 
-The server is also a [Claude Code channel](https://code.claude.com/docs/en/channels-reference): it can push new messages from subscribed chats into a running session, where they arrive as `<channel source="bitrix24" dialog_id="…" chat_title="…">` events and Claude reports them. While Claude is busy, events queue and arrive together on its next turn.
+The server is also a [Claude Code channel](https://code.claude.com/docs/en/channels-reference): it can push new messages from subscribed chats into a running session, where they arrive as `<channel source="bitrix24" dialog_id="…" chat_title="…">` events. The session subscribes to the chats its work depends on and decides what each event calls for, from telling you to replying in the chat. While Claude is busy, events queue and arrive together on its next turn.
 
 Custom channels are a Claude Code research preview, so the session has to be started with the development flag, naming the server key from your `.mcp.json`:
 
@@ -225,7 +225,7 @@ Custom channels are a Claude Code research preview, so the session has to be sta
 claude --dangerously-load-development-channels server:bitrix24
 ```
 
-Claude Code shows a warning dialog on every such launch. The flag is ignored in non-interactive mode (`-p`), and without it Claude Code drops the events silently, which the server cannot detect.
+Claude Code shows a warning dialog on every such launch. The flag is ignored in non-interactive mode (`-p`), and without it Claude Code drops the events silently, which the server cannot detect. Each new subscription therefore sends an `event="subscribed"` event at once, and the server's instructions tell the session to keep checking the chat itself until a bitrix24 event has reached it.
 
 Subscribe from the session with `bitrix24_im_watch_subscribe`, or list dialogs to watch from startup:
 
