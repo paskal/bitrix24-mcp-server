@@ -61,7 +61,7 @@ Pick by need: **fast** for the quick gist (cheap, never hallucinates, but rough)
 ### Chat subscriptions (3)
 Push new chat messages into a running Claude Code session instead of re-reading the chat. See [Receiving new chat messages](#receiving-new-chat-messages).
 
-- `bitrix24_im_watch_subscribe` — start watching a dialog (`chatNNN` or a user id); history is not replayed
+- `bitrix24_im_watch_subscribe` — start watching a dialog (`chatNNN` or a user id) for new messages, edits and reactions; history is not replayed
 - `bitrix24_im_watch_unsubscribe` — stop watching a dialog
 - `bitrix24_im_watch_list` — list watched dialogs with the last message id seen
 
@@ -217,7 +217,7 @@ Add to your project's `.mcp.json`:
 
 ### Receiving new chat messages
 
-The server is also a [Claude Code channel](https://code.claude.com/docs/en/channels-reference): it can push new messages from subscribed chats into a running session, where they arrive as `<channel source="bitrix24" dialog_id="…" chat_title="…">` events. The session subscribes to the chats its work depends on and decides what each event calls for, from telling you to replying in the chat. While Claude is busy, events queue and arrive together on its next turn.
+The server is also a [Claude Code channel](https://code.claude.com/docs/en/channels-reference): it can push new messages from subscribed chats into a running session, where new messages, edits and reactions arrive as `<channel source="bitrix24" event="…" dialog_id="…" chat_title="…">` events. The session subscribes to the chats its work depends on and decides what each event calls for, from telling you to replying in the chat. While Claude is busy, events queue and arrive together on its next turn.
 
 Custom channels are a Claude Code research preview, so the session has to be started with the development flag, naming the server key from your `.mcp.json`:
 
@@ -234,7 +234,7 @@ Subscribe from the session with `bitrix24_im_watch_subscribe`, or list dialogs t
 | `B24_WATCH_DIALOGS` | — | Comma-separated dialog ids to subscribe to at startup, e.g. `chat123,8` |
 | `B24_WATCH_INTERVAL_SEC` | `30` | Poll interval per pass, 5 to 3600 |
 
-The server polls `im.dialog.messages.get` only while at least one dialog is subscribed, and skips messages written by the webhook owner. Edits and reactions on existing messages are not reported. Subscriptions live as long as the server process, so they end with the session.
+The server polls `im.dialog.messages.get` only while at least one dialog is subscribed, and skips messages written by the webhook owner. Edits, deletions and reactions on a chat's latest 50 messages arrive as `event="changes"` events. Reactions on the owner's own messages are reported, and the owner's own edits and reactions are skipped. Subscriptions live as long as the server process, so they end with the session.
 
 ### Verify
 

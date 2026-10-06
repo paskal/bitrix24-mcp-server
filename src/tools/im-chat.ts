@@ -136,15 +136,18 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
     },
     async (args) => {
       // Bitrix honours FIRST_ID and drops LAST_ID when both are sent, which would return an unbounded window
-      if (args.firstId && args.lastId) return errorResult("pass firstId or lastId, not both");
+      const hasFirst = args.firstId !== undefined;
+      const hasLast = args.lastId !== undefined;
+      if (hasFirst && hasLast) return errorResult("pass firstId or lastId, not both");
       try {
         // Without FIRST_ID or LAST_ID, Bitrix starts from the owner's first unread message when the
         // unread count exceeds LIMIT, so the newest messages go missing; a LAST_ID ceiling reads the latest.
         const response = await client.call("im.dialog.messages.get", {
           DIALOG_ID: args.dialogId,
           LIMIT: args.limit ?? 20,
-          ...(args.firstId ? { FIRST_ID: args.firstId } : {}),
-          ...(args.lastId ? { LAST_ID: args.lastId } : args.firstId ? {} : { LAST_ID: Number.MAX_SAFE_INTEGER }),
+          // 0 is a real cursor: firstId 0 reads the chat from its oldest message
+          ...(hasFirst ? { FIRST_ID: args.firstId } : {}),
+          ...(hasLast ? { LAST_ID: args.lastId } : hasFirst ? {} : { LAST_ID: Number.MAX_SAFE_INTEGER }),
         });
         const result = response.result as Record<string, unknown> | null;
         if (!result || !("messages" in result)) {

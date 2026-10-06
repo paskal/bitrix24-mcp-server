@@ -118,10 +118,11 @@ test("im_chat_messages: a default read asks for the latest messages, paging read
     await read({ dialogId: "chat1" });
     await read({ dialogId: "chat1", lastId: 500 });
     await read({ dialogId: "chat1", firstId: 400 });
+    await read({ dialogId: "chat1", firstId: 0 });
     const sent = t.calls.filter((c) => c.method === "im.dialog.messages.get").map((c) => [c.params.FIRST_ID, c.params.LAST_ID]);
-    assert.deepEqual(sent, [[undefined, Number.MAX_SAFE_INTEGER], [undefined, 500], [400, undefined]]);
+    assert.deepEqual(sent, [[undefined, Number.MAX_SAFE_INTEGER], [undefined, 500], [400, undefined], [0, undefined]]);
     const both = await read({ dialogId: "chat1", firstId: 400, lastId: 500 });
     assert.equal(both.isError, true);
-    assert.equal(t.calls.filter((c) => c.method === "im.dialog.messages.get").length, 3, "a rejected read makes no call");
+    assert.equal(t.calls.filter((c) => c.method === "im.dialog.messages.get").length, 4, "a rejected read makes no call");
   } finally { t.restore(); }
 });
