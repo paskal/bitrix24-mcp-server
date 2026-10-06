@@ -110,3 +110,18 @@ test("im_chat_messages: a listed oversized image makes no disk or download call;
     assert.equal(r.content.filter((c) => c.type === "image").length, 1);
   } finally { t.restore(); }
 });
+
+test("im_chat_messages: a default read asks for the latest messages, paging reads pass their cursor", async () => {
+  const t = setup({}, { messages: [], users: [], files: [] });
+  try {
+    const read = t.tool("bitrix24_im_chat_messages");
+    await read({ dialogId: "chat1" });
+    await read({ dialogId: "chat1", lastId: 500 });
+    await read({ dialogId: "chat1", firstId: 400 });
+    const sent = t.calls.filter((c) => c.method === "im.dialog.messages.get").map((c) => [c.params.FIRST_ID, c.params.LAST_ID]);
+    assert.deepEqual(sent, [[undefined, Number.MAX_SAFE_INTEGER], [undefined, 500], [400, undefined]]);
+    const both = await read({ dialogId: "chat1", firstId: 400, lastId: 500 });
+    assert.equal(both.isError, true);
+    assert.equal(t.calls.filter((c) => c.method === "im.dialog.messages.get").length, 3, "a rejected read makes no call");
+  } finally { t.restore(); }
+});

@@ -22,9 +22,11 @@ export function registerTaskCommentTools(server: McpServer, client: BitrixClient
 
         if (chatId) {
           // read from IM chat (modern B24 — task chat panel)
+          // the LAST_ID ceiling reads the latest messages; without it Bitrix starts from the first unread
           const chatResponse = await client.call("im.dialog.messages.get", {
             DIALOG_ID: `chat${chatId}`,
             LIMIT: args.limit ?? 20,
+            LAST_ID: Number.MAX_SAFE_INTEGER,
           });
           const result = chatResponse.result as Record<string, unknown> | null;
           if (result && "messages" in result) {

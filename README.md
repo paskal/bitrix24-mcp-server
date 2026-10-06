@@ -1,6 +1,6 @@
 # Bitrix24 MCP Server
 
-An MCP (Model Context Protocol) server that exposes Bitrix24 REST API to AI assistants. Provides 35 tools for managing tasks, CRM entities, call recordings (incl. local transcription), users, workgroups, and Knowledge Base articles via Bitrix24's inbound webhook API.
+An MCP (Model Context Protocol) server that exposes Bitrix24 REST API to AI assistants. Provides 50 tools for managing tasks, CRM entities, call recordings (incl. local transcription), users, workgroups, and Knowledge Base articles via Bitrix24's inbound webhook API.
 
 ## Tools
 
@@ -57,6 +57,13 @@ Pick by need: **fast** for the quick gist (cheap, never hallucinates, but rough)
 - `bitrix24_user_get` — get user(s) by ID or filter
 - `bitrix24_user_search` — search users by name
 - `bitrix24_workgroup_list` — list workgroups and projects
+
+### Chat subscriptions (3)
+Push new chat messages into a running Claude Code session instead of re-reading the chat. See [Receiving new chat messages](#receiving-new-chat-messages).
+
+- `bitrix24_im_watch_subscribe` — start watching a dialog (`chatNNN` or a user id); history is not replayed
+- `bitrix24_im_watch_unsubscribe` — stop watching a dialog
+- `bitrix24_im_watch_list` — list watched dialogs with the last message id seen
 
 ### Knowledge Base (4, optional)
 Requires the third-party marketplace app [«База знаний и тестирование» by IT-Solution](https://it-solution.ru/b24apps/prilozhenie_bitrix24_baza_znanii/) installed on your portal. Bitrix24's native REST API does not expose knowledge base content — this app fills the gap with its own REST API.
@@ -208,9 +215,30 @@ Add to your project's `.mcp.json`:
 
 > **Note:** Option B depends on the MCP client correctly passing `env` and resolving `npx` from `PATH`. If it doesn't connect, use Option A.
 
+### Receiving new chat messages
+
+The server is also a [Claude Code channel](https://code.claude.com/docs/en/channels-reference): it can push new messages from subscribed chats into a running session, where they arrive as `<channel source="bitrix24" dialog_id="…" chat_title="…">` events and Claude reports them. While Claude is busy, events queue and arrive together on its next turn.
+
+Custom channels are a Claude Code research preview, so the session has to be started with the development flag, naming the server key from your `.mcp.json`:
+
+```bash
+claude --dangerously-load-development-channels server:bitrix24
+```
+
+Claude Code shows a warning dialog on every such launch. The flag is ignored in non-interactive mode (`-p`), and without it Claude Code drops the events silently, which the server cannot detect.
+
+Subscribe from the session with `bitrix24_im_watch_subscribe`, or list dialogs to watch from startup:
+
+| Var | Default | Purpose |
+|---|---|---|
+| `B24_WATCH_DIALOGS` | — | Comma-separated dialog ids to subscribe to at startup, e.g. `chat123,8` |
+| `B24_WATCH_INTERVAL_SEC` | `30` | Poll interval per pass, 5 to 3600 |
+
+The server polls `im.dialog.messages.get` only while at least one dialog is subscribed, and skips messages written by the webhook owner. Edits and reactions on existing messages are not reported. Subscriptions live as long as the server process, so they end with the session.
+
 ### Verify
 
-After restarting Claude Code, run `/mcp` to confirm the server is connected. You should see 31 tools, or 35 if the Knowledge Base token is configured.
+After restarting Claude Code, run `/mcp` to confirm the server is connected. You should see 46 tools, or 50 if the Knowledge Base token is configured.
 
 ## Development
 
@@ -251,7 +279,8 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | \
 
 ```
 src/
-  index.ts            # entry point, auth, stdio transport
+  index.ts            # entry point, auth, stdio transport, channel capability
+  chat-watch.ts       # chat subscriptions: polls dialogs, pushes new messages as channel events
   bitrix-client.ts    # REST client with rate limiting (2 req/s) and pagination
   kb-client.ts        # IT-Solution KB API client (optional, activated by token)
   types.ts            # helpers (textResult, errorResult, zId, status/priority maps)

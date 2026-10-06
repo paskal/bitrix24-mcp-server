@@ -37,6 +37,14 @@ export function extractReactions(
   return Object.keys(out).length ? out : undefined;
 }
 
+// The display form of a message text: HTML tags and BBCode other than [USER] stripped.
+// Lossy by design; a non-string text is passed through unchanged.
+export function displayText(text: unknown): unknown {
+  return typeof text === "string"
+    ? text.replace(/<[^>]+>/g, "").replace(/\[(?!USER)[^\]]+\]/g, "").trim()
+    : text;
+}
+
 // Resolve a chat/disk file via disk.file.get -> DOWNLOAD_URL and fetch it. The body is read
 // only for an image within maxBytes; anything else is described from the response headers and
 // the disk metadata and the transfer is cancelled unread, so a PDF or an oversized photo costs
@@ -121,16 +129,22 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
     {
       dialogId: z.string().describe("Dialog ID: 'chatNNN' for group/task chats, or user ID as string for 1-on-1"),
       limit: z.number().optional().describe("Max messages to return (default: 20)"),
-      firstId: z.number().optional().describe("Message ID to start from (for pagination — pass the smallest ID from previous response to go further back in history)"),
+      firstId: z.number().optional().describe("Return only messages newer than this message ID. Do not combine with lastId: Bitrix applies only one of them"),
+      lastId: z.number().optional().describe("Return only messages older than this message ID (for pagination — pass the smallest ID from the previous response to go further back in history). Do not combine with firstId"),
       includeImages: z.boolean().optional().describe("Inline image attachments as viewable images (default: true). Set false for a text-only, lower-token read."),
       maxImages: z.number().optional().describe(`Cap on inlined images per read (default: ${DEFAULT_MAX_INLINE_IMAGES}).`),
     },
     async (args) => {
+      // Bitrix honours FIRST_ID and drops LAST_ID when both are sent, which would return an unbounded window
+      if (args.firstId && args.lastId) return errorResult("pass firstId or lastId, not both");
       try {
+        // Without FIRST_ID or LAST_ID, Bitrix starts from the owner's first unread message when the
+        // unread count exceeds LIMIT, so the newest messages go missing; a LAST_ID ceiling reads the latest.
         const response = await client.call("im.dialog.messages.get", {
           DIALOG_ID: args.dialogId,
           LIMIT: args.limit ?? 20,
           ...(args.firstId ? { FIRST_ID: args.firstId } : {}),
+          ...(args.lastId ? { LAST_ID: args.lastId } : args.firstId ? {} : { LAST_ID: Number.MAX_SAFE_INTEGER }),
         });
         const result = response.result as Record<string, unknown> | null;
         if (!result || !("messages" in result)) {
@@ -171,16 +185,13 @@ export function registerImChatTools(server: McpServer, client: BitrixClient): vo
             (id) => userMap.get(id),
           );
           const rawText = typeof m.text === "string" ? m.text : undefined;
-          const displayText =
-            rawText !== undefined
-              ? rawText.replace(/<[^>]+>/g, "").replace(/\[(?!USER)[^\]]+\]/g, "").trim()
-              : m.text;
+          const shown = displayText(m.text);
           return {
             id: m.id,
             author: userMap.get(String(m.author_id)) ?? m.author_id,
             date: m.date,
-            text: displayText,
-            ...(rawText !== undefined && rawText !== displayText ? { textRaw: rawText } : {}),
+            text: shown,
+            ...(rawText !== undefined && rawText !== shown ? { textRaw: rawText } : {}),
             ...(attached.length ? { files: attached } : {}),
             ...(reactions ? { reactions } : {}),
           };

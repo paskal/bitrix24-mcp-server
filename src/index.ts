@@ -4,6 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { BitrixClient } from "./bitrix-client.js";
 import { KbClient } from "./kb-client.js";
 import { registerAllTools } from "./tools/index.js";
+import { CHANNEL_INSTRUCTIONS, ChatWatcher, registerChatWatchTools, webhookOwnerId } from "./chat-watch.js";
 
 function readFromOpRef(ref: string): string | null {
   try {
@@ -47,12 +48,30 @@ if (!kbClient) {
   console.error("KB tools disabled: set KB_API_TOKEN or KB_API_TOKEN_OP_REF to enable (IT-Solution «База знаний» API)");
 }
 
-const server = new McpServer({
-  name: "bitrix24",
-  version: "1.0.0",
-});
+// claude/channel lets the server push new chat messages into a Claude Code session
+const server = new McpServer(
+  { name: "bitrix24", version: "1.0.0" },
+  { capabilities: { experimental: { "claude/channel": {} } }, instructions: CHANNEL_INSTRUCTIONS },
+);
 
 registerAllTools(server, client, kbClient);
 
+const watcher = new ChatWatcher(
+  client,
+  async (content, meta) => {
+    await server.server.notification({ method: "notifications/claude/channel", params: { content, meta } });
+  },
+  webhookOwnerId(webhookUrl),
+  // 5s to 1h apart; an unset or malformed value falls back to 30s
+  Math.min(3600, Math.max(5, Number(process.env.B24_WATCH_INTERVAL_SEC) || 30)) * 1000,
+);
+registerChatWatchTools(server, watcher);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
+
+for (const dialogId of (process.env.B24_WATCH_DIALOGS ?? "").split(",").map((d) => d.trim()).filter(Boolean)) {
+  await watcher.subscribe(dialogId).catch((e: unknown) => {
+    console.error(`chat watch: cannot subscribe to ${dialogId}: ${e instanceof Error ? e.message : String(e)}`);
+  });
+}
