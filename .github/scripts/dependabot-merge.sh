@@ -50,7 +50,13 @@ releases_aged() {
 }
 
 for n in $(gh pr list --author app/dependabot --state open --limit 200 --json number -q '.[].number'); do
-  pr=$(gh pr view "$n" --json mergeable,headRefName,headRefOid,commits,statusCheckRollup)
+  # GitHub computes mergeability lazily and reports UNKNOWN for a while after
+  # master moves, which every merge in this loop does
+  for _ in 1 2 3 4 5 6; do
+    pr=$(gh pr view "$n" --json mergeable,headRefName,headRefOid,commits,statusCheckRollup)
+    [ "$(jq -r .mergeable <<<"$pr")" = UNKNOWN ] || break
+    sleep 10
+  done
   sha=$(jq -r '
       def passed($name): any(.statusCheckRollup[];
         .workflowName == "ci" and .name == $name and .conclusion == "SUCCESS");
