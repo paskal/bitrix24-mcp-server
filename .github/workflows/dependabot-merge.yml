@@ -1,9 +1,6 @@
 name: dependabot-merge
 
-# Merges open Dependabot pull requests once both ci jobs passed on their head
-# commit and that commit is at least MIN_AGE_DAYS old. Version updates already
-# wait out the cooldown in dependabot.yml; this delay also covers security
-# updates, which Dependabot raises without a cooldown.
+# Merges ready Dependabot pull requests; the rules are in the script.
 on:
   schedule:
     - cron: "17 6 * * *"
@@ -19,27 +16,10 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
-      MIN_AGE_DAYS: "3"
+      MIN_RELEASE_AGE_DAYS: "3"
     steps:
-      - name: Merge aged Dependabot pull requests with passing ci
-        run: |
-          cutoff=$(date -u -d "-${MIN_AGE_DAYS} days" +%s)
-          for n in $(gh pr list --author app/dependabot --state open --limit 200 --json number -q '.[].number'); do
-            sha=$(gh pr view "$n" --json mergeable,headRefOid,commits,statusCheckRollup \
-              | jq -r --argjson cutoff "$cutoff" '
-                  def passed($name): any(.statusCheckRollup[];
-                    .workflowName == "ci" and .name == $name and .conclusion == "SUCCESS");
-                  select(.mergeable == "MERGEABLE")
-                  | select((.commits[-1].committedDate | fromdateiso8601) <= $cutoff)
-                  | select(passed("test (24)") and passed("test (26)"))
-                  | select(all(.statusCheckRollup[];
-                      ((.conclusion // .state) | IN("SUCCESS", "SKIPPED", "NEUTRAL"))))
-                  | .headRefOid')
-            if [ -z "$sha" ]; then
-              echo "#$n not ready"
-              continue
-            fi
-            echo "merging #$n at $sha"
-            gh pr merge "$n" --squash --delete-branch --match-head-commit "$sha" \
-              || echo "::warning::merge of #$n failed"
-          done
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Merge ready Dependabot pull requests
+        run: .github/scripts/dependabot-merge.sh

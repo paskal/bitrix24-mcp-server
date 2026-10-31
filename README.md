@@ -253,12 +253,13 @@ CI runs the type-check, build and tests on Node 24 and 26 for pushes and pull re
 
 ### Dependency updates
 
-Dependabot proposes npm and GitHub Actions updates weekly. A version update is offered only
-once the release is 7 days old, or 30 days for an npm major version, so a compromised release has
-time to be caught and pulled before it reaches the repository. Security updates arrive without
-that wait. A daily workflow merges a Dependabot pull request once both CI jobs passed on its head
-commit and that commit is at least 3 days old, which also delays security updates. Those merges
-rely on the pull request's own CI: a merge made by the workflow token starts no CI run on master.
+Dependabot proposes npm and GitHub Actions updates weekly, and only for releases at least 7
+days old, or 30 days for an npm major version, so a compromised release has time to be caught
+and pulled before it is offered. A daily workflow merges a Dependabot pull request once both CI
+jobs passed on its head commit. Security updates are the exception GitHub allows no cooldown
+for: the workflow holds one back until each npm release it updates is 3 days old. Those merges
+rely on the pull request's own CI, since a merge made by the workflow token starts no CI run on
+master.
 A merge to master does not reach the terrty agents until the deploy steps below are run.
 
 ### Deploying to the terrty agent host
