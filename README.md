@@ -268,9 +268,12 @@ The agent containers there launch the server as `node /opt/b24-mcp/dist/index.js
 nothing: the running agents keep the old behaviour and give no sign of it.
 
 ```bash
-ssh terrty 'cd ~/bitrix24-mcp-server && git pull --ff-only origin master && npm run build'
-ssh terrty 'for c in fg-agent-dmitry fg-agent-maria fg-agent-aleksandr; do docker restart -t 30 "$c"; done'
+ssh terrty 'cd ~/bitrix24-mcp-server && git pull --ff-only origin master && npm install && npm run build'
+ssh terrty 'for c in $(docker ps --filter name=fg-agent- --format "{{.Names}}"); do docker restart -t 30 "$c"; done'
 ```
+
+The containers mount the whole checkout, `node_modules` included, so a dependency update
+needs the `npm install` step or the agents keep the old packages.
 
 The restart matters because the server is spawned over stdio by a long-lived agent session,
 so an already-running child keeps executing the old bundle until its parent restarts.
